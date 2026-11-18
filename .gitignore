@@ -1,5 +1,7 @@
 __pycache__/
 *.py[cod]
 .venv/
+venv_drift_forest/
+.env
 .pytest_cache/
-*.parquet
+.vscode/
