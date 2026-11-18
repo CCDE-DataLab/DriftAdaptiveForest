@@ -46,9 +46,33 @@ def generate_data(n_samples:int=5000,start_date:str="2023-01-01",
 
     ruido = rng.normal(0, 1.2, size=n_samples)
 
+    estancia_vieja = (
+        2.0
+        + 0.05 * edad
+        + 0.8 * comorbilidad
+        + comorbilidad**2
+        + severidad_ingreso ** (1 / 2)
+        + 3.0 * ocupacion_hospitalaria ** (1 / 3)
+    )
 
-    dias_estancia = np.clip(2.0 + 0.05 * edad + 0.8 * comorbilidad + comorbilidad**2 + severidad_ingreso**(1/2) + 3.0*ocupacion_hospitalaria**(1/3)+ ruido, 
-    1, None)
+    if drift_type in ("concept", "both"):
+        # Nuevo protocolo clinico a partir de t_norm ~ 0.6:
+        # reduce el impacto cuadratico de comorbilidad y aumenta sensibilidad a severidad/saturacion
+        alpha_t = 1.0 / (1.0 + np.exp(-15.0 * (t_norm - 0.6)))
+        estancia_nueva = (
+            1.0
+            + 0.02 * edad
+            + 0.3 * comorbilidad
+            + 0.25 * (comorbilidad**2)
+            + 1.8 * severidad_ingreso
+            - 2.0 * ocupacion_hospitalaria
+            + np.where(ocupacion_hospitalaria > 0.82, 4.5, 0.0)
+        )
+        base_estancia = (1.0 - alpha_t) * estancia_vieja + alpha_t * estancia_nueva
+    else:
+        base_estancia = estancia_vieja
+
+    dias_estancia = np.clip(base_estancia + ruido, 1, None)
 
     
     
@@ -76,5 +100,5 @@ def generate_data(n_samples:int=5000,start_date:str="2023-01-01",
 
 
 if __name__ == "__main__":
-    df = generate_data(path=RAW_DIR / "healthcare_drift.parquet")
-    print(f"Archivo guardaro exitosamente. Numero de filas y columnas:\n{df.shape}")
+    df_both = generate_data(drift_type="both", path=RAW_DIR / "healthcare_both_drift.parquet")
+    print(f"Dataset 'both' guardado exitosamente. Filas y columnas: {df_both.shape}")
