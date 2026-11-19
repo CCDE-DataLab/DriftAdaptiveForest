@@ -23,6 +23,7 @@ class DriftRegressor(BaseEstimator, RegressorMixin):
         weighting_mode: str = "mmd",
         recent_val_frac: float = 0.15,
         alpha_hybrid: float = 0.5,
+        refit_recent: bool = True,
         max_depth: int | None = None,
         min_samples_leaf: int = 1,
         random_state: int | None = 42,
@@ -33,6 +34,7 @@ class DriftRegressor(BaseEstimator, RegressorMixin):
         self.weighting_mode = weighting_mode
         self.recent_val_frac = recent_val_frac
         self.alpha_hybrid = alpha_hybrid
+        self.refit_recent = refit_recent
         self.max_depth = max_depth
         self.min_samples_leaf = min_samples_leaf
         self.random_state = random_state
@@ -92,25 +94,39 @@ class DriftRegressor(BaseEstimator, RegressorMixin):
                 pred_val = rf.predict(X_val_rec)
                 self.recent_mse_.append(float(mean_squared_error(y_val_rec, pred_val)))
 
+        # Re-entrenar el último bloque incluyendo la ventana de validación reciente
+        # para no desperdiciar los datos más frescos tras medir recent_mse_.
+        if self.refit_recent and X_val_rec is not None:
+            last_idx = bloques_idx[-1]
+            X_last_full = np.vstack([X_train_blocks[last_idx], X_val_rec])
+            y_last_full = np.concatenate([y_train_blocks[last_idx], y_val_rec])
+            self.models_[-1].fit(X_last_full, y_last_full)
+            self.block_features_[-1] = self.scaler_.transform(X_last_full)
+
         return self
 
     def compute_weights(self, X_scaled: np.ndarray) -> np.ndarray:
         self.mmd_results_ = []
+        can_unbiased_x = len(X_scaled) > 1
 
         if self.weighting_mode in ("mmd", "hybrid"):
             for bloque in self.block_features_:
-                mmd = compute_mmd_square(X_ini=bloque, X_fin=X_scaled)
+                mmd = compute_mmd_square(
+                    X_ini=bloque,
+                    X_fin=X_scaled,
+                    unbiased=(can_unbiased_x and len(bloque) > 1),
+                )
                 self.mmd_results_.append(max(0.0, mmd))
             mmd_array = np.asarray(self.mmd_results_, dtype=float)
+            mmd_norm = mmd_array / (mmd_array.mean() + 1e-8)
 
         if self.weighting_mode == "mmd":
-            penalties = mmd_array
+            penalties = mmd_norm
         elif self.weighting_mode == "recent_error":
             mse_array = np.asarray(self.recent_mse_, dtype=float)
             penalties = mse_array / (mse_array.mean() + 1e-8)
         else:  # "hybrid"
             mse_array = np.asarray(self.recent_mse_, dtype=float)
-            mmd_norm = mmd_array / (mmd_array.mean() + 1e-8)
             mse_norm = mse_array / (mse_array.mean() + 1e-8)
             penalties = self.alpha_hybrid * mmd_norm + (1.0 - self.alpha_hybrid) * mse_norm
 
