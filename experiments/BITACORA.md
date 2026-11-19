@@ -187,3 +187,13 @@ por defecto es demasiado débil para la escala del MMD² (ver §4, punto 2).
 Archivos: `experiments/synthetic_scenarios.py`, `experiments/real_datasets.py`,
 `experiments/benchmark_drift.py`, `experiments/tune_benchmark.py`, `experiments/summarize_benchmark.py`,
 resultados en `experiments/results/`.
+
+---
+
+## 8. Rama `mejoras-modelo-drift` (19 nov 2026)
+
+| # | Paso | Resultado |
+|---|---|---|
+| 10 | Nueva clase `AdaptiveDriftForest` (`models/adaptive_ensemble.py`): ventanas recientes anidadas + bloques, error normalizado, reentrenamiento con la cola, pesos fijos desde `fit` | Corrige los 5 problemas de §4. Verificado: predice 1 fila y es independiente del lote (dif. 1e-15). |
+| 11 | Benchmark de `ADF_error` y `ADF_hybrid` con los mismos datasets, semillas y protocolos | `experiments/results/benchmark_*_adf.csv` |
+| 12 | Resultado | Sintéticos walk-forward 0.809 (10/11, p=0.002); reales walk-forward 0.983 y estático 0.919. Mejor modelo en rank medio en los 4 cortes. Detalle en `MEJORAS.md`. |

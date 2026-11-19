@@ -11,6 +11,7 @@ Modelos (mismos hiperparámetros de árbol: 100 árboles, profundidad libre):
   RF_pesos_exp     RF con sample_weight exponencial (vida media = 20 % del histórico)
   DR_mmd / DR_recent_error / DR_hybrid   DriftRegressor(n_blocks=5, beta=15) como en el README
   DR_recent_refit* variante experimental: recent_error + reentrenar el último bloque con la cola
+  ADF_error / ADF_hybrid  AdaptiveDriftForest (versión mejorada, ver models/adaptive_ensemble.py)
 
 Uso (desde la raíz del repo):
   venv_drift_forest/Scripts/python.exe -I experiments/benchmark_drift.py --suite all --seeds 0 1 2
@@ -38,6 +39,7 @@ from sklearn.preprocessing import StandardScaler  # noqa: E402
 from experiments.real_datasets import DATASETS  # noqa: E402
 from experiments.synthetic_scenarios import SCENARIOS  # noqa: E402
 from src.drift_adaptive_forest.metrics.mmd import compute_mmd_square  # noqa: E402
+from src.drift_adaptive_forest.models.adaptive_ensemble import AdaptiveDriftForest  # noqa: E402
 from src.drift_adaptive_forest.models.block_ensemble import DriftRegressor  # noqa: E402
 
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -102,6 +104,14 @@ def drift_regressor(mode, cls=DriftRegressor):
     return _fit_predict
 
 
+def adaptive_forest(weighting):
+    def _fit_predict(Xtr, ytr, Xte, seed):
+        m = AdaptiveDriftForest(weighting=weighting, n_estimators=N_TREES, random_state=seed)
+        pred = m.fit(Xtr, ytr).predict(Xte)
+        return pred, m.weights_summary()
+    return _fit_predict
+
+
 MODELS = {
     "RF_clasico": rf_clasico,
     "RF_ventana": rf_ventana,
@@ -110,6 +120,8 @@ MODELS = {
     "DR_recent_error": drift_regressor("recent_error"),
     "DR_hybrid": drift_regressor("hybrid"),
     "DR_recent_refit*": drift_regressor("recent_error", DriftRegressorRefit),
+    "ADF_error": adaptive_forest("error"),
+    "ADF_hybrid": adaptive_forest("hybrid"),
 }
 
 
@@ -123,13 +135,15 @@ def splits(n: int, protocol: str):
             yield step, a, b
 
 
-def run_dataset(name, kind, drift_label, X, y, seed, rows_out):
+def run_dataset(name, kind, drift_label, X, y, seed, rows_out, models=None):
     X = np.asarray(X, dtype=float)
     y = np.asarray(y, dtype=float)
     for protocol in ("static", "walk"):
         for step, a, b in splits(len(X), protocol):
             Xtr, ytr, Xte, yte = X[:a], y[:a], X[a:b], y[a:b]
             for mname, fn in MODELS.items():
+                if models and mname not in models:
+                    continue
                 t0 = time.perf_counter()
                 pred, weights = fn(Xtr, ytr, Xte, seed)
                 rows_out.append({
@@ -196,6 +210,8 @@ def main():
     ap.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2])
     ap.add_argument("--only", nargs="*", default=None, help="limitar a estos datasets")
     ap.add_argument("--tag", default="")
+    ap.add_argument("--models", nargs="*", default=None, help="correr solo estos modelos")
+    ap.add_argument("--no-diag", action="store_true", help="omitir diagnóstico de drift")
     args = ap.parse_args()
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -218,11 +234,11 @@ def main():
     t_start = time.perf_counter()
     for i, (name, kind, label, make, seed) in enumerate(jobs, 1):
         X, y = make()
-        if seed == jobs[[j[0] for j in jobs].index(name)][4]:  # diagnóstico 1 vez por dataset
+        if not args.no_diag and seed == jobs[[j[0] for j in jobs].index(name)][4]:  # diagnóstico 1 vez por dataset
             d = drift_diagnostics(X, y, seed=seed)
             diags.append({"dataset": name, "kind": kind, "drift": label, **d})
             pd.DataFrame(diags).to_csv(diag_path, index=False)
-        run_dataset(name, kind, label, X, y, seed, rows)
+        run_dataset(name, kind, label, X, y, seed, rows, args.models)
         pd.DataFrame(rows).to_csv(res_path, index=False)
         print(f"[{i}/{len(jobs)}] {name} seed={seed} n={len(X)} p={X.shape[1]} "
               f"({time.perf_counter() - t_start:.0f}s acumulados)", flush=True)
