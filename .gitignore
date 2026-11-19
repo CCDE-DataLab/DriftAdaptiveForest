@@ -5,3 +5,5 @@ venv_drift_forest/
 .env
 .pytest_cache/
 .vscode/
+data/real/
+experiments/results/log_*.txt
