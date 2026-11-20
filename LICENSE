@@ -1,5 +1,5 @@
-LICENCIA DE USO EDUCATIVO EXCLUSIVO CCDE
-Versión 1.0, noviembre de 2026
+LICENCIA DE CÓDIGO VISIBLE CON USO BAJO AUTORIZACIÓN (CCDE)
+Versión 1.1, noviembre de 2026
 
 Copyright (c) 2026 Mauricio Aguirre Stornaiuolo y Piero Alexander Simeon Bustillos.
 Todos los derechos reservados.
@@ -11,49 +11,59 @@ DriftRegressor y AdaptiveDriftForest, los generadores de datos sintéticos, los 
 experimentación, los resultados, la documentación y el documento académico de la carpeta
 paper/ (en adelante, "la Obra").
 
-2. Licenciatarios
+Que la Obra sea públicamente visible no significa que sea de uso libre. Esta no es una licencia
+de código abierto.
 
-Se concede una licencia no exclusiva, intransferible, gratuita y revocable únicamente a los
-miembros activos del Círculo de Ciencia de Datos y Econometría (CCDE). Ninguna otra persona
-u organización recibe derecho alguno sobre la Obra.
+2. Lo que cualquier persona puede hacer sin pedir permiso
 
-3. Usos permitidos
+  a) Leer y revisar la Obra en el repositorio público.
+  b) Citarla en trabajos académicos, indicando autores, título, año y enlace al repositorio.
 
-Los licenciatarios pueden, con fines exclusivamente de aprendizaje y formación dentro del CCDE:
-  a) leer, estudiar, ejecutar y modificar la Obra;
-  b) usarla en talleres, sesiones y ejercicios internos del CCDE;
-  c) citarla en trabajos académicos, indicando a los autores, el título y el año.
+3. Uso por miembros del CCDE
 
-4. Usos prohibidos
+Los miembros activos del Círculo de Ciencia de Datos y Econometría (CCDE) pueden, además,
+descargar, ejecutar, estudiar y modificar la Obra con fines de aprendizaje y en actividades
+internas del CCDE, sin necesidad de solicitud previa.
 
-Sin autorización previa y por escrito de los autores, queda prohibido:
-  a) cualquier uso comercial o con fines de lucro, incluida la consultoría y la prestación de
+4. Usos que requieren autorización previa de los autores
+
+Cualquier otro uso requiere contactar a los autores y obtener su autorización por escrito
+(un correo o una respuesta escrita en el repositorio bastan). Esto incluye:
+  a) ejecutar, copiar o integrar la Obra, o una parte de ella, en proyectos propios, académicos
+     o profesionales;
+  b) cualquier uso comercial o con fines de lucro, incluida la consultoría y la prestación de
      servicios a terceros;
-  b) distribuir, publicar, sublicenciar o poner la Obra (o una modificación de ella) a
-     disposición de personas ajenas al CCDE, incluso en repositorios públicos;
-  c) presentar la Obra, los modelos o las ideas que contiene como propios, o publicar trabajos
-     derivados sin reconocer a los autores;
-  d) eliminar o alterar este aviso de copyright y de licencia.
+  c) redistribuir, publicar o sublicenciar la Obra o versiones modificadas de ella;
+  d) publicar trabajos derivados de los modelos o del documento.
 
-5. Atribución
+Los autores pueden conceder, condicionar o denegar cada solicitud.
 
-Toda copia o modificación interna debe conservar este archivo y el aviso de copyright. Toda
-cita debe indicar: Aguirre Stornaiuolo, M. y Simeon Bustillos, P. A. (2026). DriftAdaptiveForest.
-Círculo de Ciencia de Datos y Econometría.
+5. Cómo contactar
 
-6. Terceros
+Abrir un issue en https://github.com/CCDE-DataLab/DriftAdaptiveForest/issues indicando
+quién solicita, para qué se usará la Obra y en qué contexto (académico, personal, comercial).
+
+6. Atribución
+
+Toda copia autorizada debe conservar este archivo y el aviso de copyright. Toda cita debe
+indicar: Aguirre Stornaiuolo, M. y Simeon Bustillos, P. A. (2026). DriftAdaptiveForest.
+Círculo de Ciencia de Datos y Econometría. https://github.com/CCDE-DataLab/DriftAdaptiveForest
+
+Nadie puede presentar la Obra, los modelos o las ideas que contiene como propios, ni eliminar
+o alterar este aviso.
+
+7. Terceros
 
 Los conjuntos de datos de data/real/ y las bibliotecas indicadas en requirements.txt pertenecen
 a sus respectivos titulares y se rigen por sus propias licencias; esta licencia no los cubre.
 
-7. Terminación
+8. Terminación
 
-La licencia termina automáticamente para quien deje de ser miembro del CCDE o incumpla
-cualquiera de sus condiciones. En ese caso, debe dejar de usar la Obra y eliminar sus copias.
+Los permisos de esta licencia terminan automáticamente para quien incumpla cualquiera de sus
+condiciones, o deje de ser miembro del CCDE en el caso del punto 3. En ese caso, debe dejar de
+usar la Obra y eliminar sus copias.
 
-8. Exclusión de garantías
+9. Exclusión de garantías
 
 La Obra se entrega "tal cual", sin garantía de ningún tipo. Los autores no responden por daños
 derivados de su uso.
-
-Para solicitar permisos adicionales, contactar a los autores.

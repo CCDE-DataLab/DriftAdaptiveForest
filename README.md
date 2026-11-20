@@ -142,4 +142,7 @@ DriftAdaptiveForest/
 ## Licencia
 
 Copyright (c) 2026 Mauricio Aguirre Stornaiuolo y Piero Alexander Simeon Bustillos. Todos los derechos reservados.
-Uso permitido solo a miembros del Círculo de Ciencia de Datos y Econometría (CCDE), con fines de aprendizaje. Ver [LICENSE](LICENSE).
+El código es visible, pero **no es de código abierto**. Puedes leerlo y citarlo; para usarlo, copiarlo o integrarlo
+en tus proyectos, **contáctanos primero** abriendo un [issue](https://github.com/CCDE-DataLab/DriftAdaptiveForest/issues)
+con quién eres y para qué lo usarás. Los miembros del CCDE pueden usarlo con fines de aprendizaje sin solicitud previa.
+Condiciones completas en [LICENSE](LICENSE).
