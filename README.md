@@ -136,3 +136,10 @@ DriftAdaptiveForest/
 * [ ] **Paso 5 (Próximo):** Estrategia A — Bootstrap Temporal Probabilístico ($w_i = e^{-\alpha \Delta t_i}$ con control de ESS).
 * [ ] **Paso 6 (Experimental):** Prototipo de **MMD-Split** en los primeros niveles del árbol usando *Random Fourier Features* (RFF):
   $$\mathcal{L}_{\text{hibrida}}(j, s) = \mathcal{L}_{\text{MSE}}(S_L, S_R) + \eta \cdot \Omega_{\text{MMD}}(S_L, S_R, R)$$
+
+---
+
+## Licencia
+
+Copyright (c) 2026 Mauricio Aguirre Stornaiuolo y Piero Alexander Simeon Bustillos. Todos los derechos reservados.
+Uso permitido solo a miembros del Círculo de Ciencia de Datos y Econometría (CCDE), con fines de aprendizaje. Ver [LICENSE](LICENSE).
