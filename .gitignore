@@ -7,3 +7,16 @@ venv_drift_forest/
 .vscode/
 data/real/
 experiments/results/log_*.txt
+
+# Archivos temporales de compilacion LaTeX
+paper/*.aux
+paper/*.bbl
+paper/*.bcf
+paper/*.blg
+paper/*.log
+paper/*.out
+paper/*.run.xml
+paper/*.toc
+paper/*.synctex.gz
+paper/*.fdb_latexmk
+paper/*.fls

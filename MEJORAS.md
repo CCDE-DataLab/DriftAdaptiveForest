@@ -43,6 +43,18 @@ Error relativo = RMSE / RMSE del RF clásico (media geométrica). Menos de 1 = m
 - **Reales:** primer modelo que supera en promedio al RF clásico en ambos protocolos. `gas_drift`
   pasó de 1.25 a 1.00. La ventaja en reales es modesta y sin significancia estadística (5 datasets).
 
+## Validación con semillas nuevas
+
+Para descartar que el diseño estuviera ajustado al ruido de las semillas 0–2, se repitió el benchmark sintético
+con las semillas 3–5 (`experiments/results/summary_holdout.md`). El resultado se mantiene:
+
+| Sintéticos | ADF_error | ADF_hybrid | RF ventana | DriftRegressor orig. (mejor) |
+|---|---:|---:|---:|---:|
+| Walk-forward | 0.810 (10/11, p = 0.005) | 0.823 | 0.846 | 0.965 |
+| 80/20 | 0.691 (8/11, p = 0.032) | 0.677 | 0.701 | 0.898 |
+
+Limitación: son los mismos 11 generadores, así que valida frente a otro ruido, no frente a tipos de drift distintos.
+
 ## Límites
 
 - En **drift recurrente** el `DriftRegressor` original con `hybrid` sigue siendo mejor

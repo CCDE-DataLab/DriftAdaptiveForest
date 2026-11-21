@@ -91,6 +91,42 @@ Evaluación temporal estricta (`4,000` filas iniciales para entrenamiento/CV, `1
 
 > **Conclusión clave:** Cuando solo cambia $P(X)$ levemente, el RF clásico aprovecha todo el histórico; pero cuando ocurre **Data + Concept Drift**, `DriftRegressor` supera ampliamente al RF clásico al aislar regímenes y colapsar el peso de las épocas obsoletas.
 
+> **Advertencia:** los resultados de arriba corresponden a un solo escenario (el más favorable) y no incluyen líneas base de recencia. En el [benchmark ampliado](#benchmark-ampliado-16-datasets-y-líneas-base-de-recencia) un RF entrenado solo con datos recientes iguala o supera al `DriftRegressor` en la mayoría de los casos con concept drift, y el `DriftRegressor` es peor que el RF clásico cuando no hay concept drift.
+
+---
+
+## Benchmark ampliado: 16 datasets y líneas base de recencia
+
+11 escenarios sintéticos (4–20 variables, distintos tipos de drift) y 5 datasets reales (Air Quality, Bike Sharing, Gas Sensor Drift, Beijing PM2.5, Electricity), con split 80/20 y walk-forward (6 reentrenamientos). Se añadieron dos líneas base de recencia, que el README original no tenía: un RF entrenado solo con el 20 % más reciente (`RF_ventana`) y un RF con pesos exponenciales (`RF_pesos_exp`). Detalle en [experiments/BITACORA.md](experiments/BITACORA.md), [CONCLUSIONES.md](CONCLUSIONES.md) y [MEJORAS.md](MEJORAS.md).
+
+Error relativo = RMSE del modelo / RMSE del RF clásico (media geométrica). Menos de 1 = mejor que el RF clásico.
+
+| Conjunto y protocolo | `AdaptiveDriftForest` | `RF_ventana` | `DriftRegressor` (mejor modo) |
+| :--- | :---: | :---: | :---: |
+| Sintéticos, walk-forward (semillas 0–2) | **0.809** | 0.839 | 0.965 |
+| Sintéticos, walk-forward (semillas 3–5, validación) | **0.810** | 0.846 | 0.965 |
+| Sintéticos, 80/20 (semillas 0–2) | **0.698** | 0.699 | 0.897 |
+| Sintéticos, 80/20 (semillas 3–5, validación) | **0.677–0.691** | 0.701 | 0.898 |
+| Reales, walk-forward | **0.983** | 1.049 | 1.020 |
+| Reales, 80/20 | **0.919** | 1.004 | 0.990 |
+
+**Hallazgos:**
+- El `DriftRegressor` original supera al RF clásico solo con concept drift fuerte, y ahí un RF de ventana reciente iguala o lo supera. Sin concept drift, el `DriftRegressor` es peor que el RF clásico (hasta +29 % de error).
+- `AdaptiveDriftForest` (ventanas recientes anidadas, penalización por error normalizado, reentrenamiento con la cola de validación y pesos fijos) supera al RF clásico en 10 de 11 escenarios sintéticos (Wilcoxon p = 0.002 con semillas 0–2 y p = 0.005 con semillas 3–5) y no pierde cuando no hay drift. También corrige el fallo de `predict` con una sola fila.
+- En datos reales la ventaja es modesta y no es estadísticamente significativa (5 datasets).
+- En concept drift **recurrente** (`friedman_recurring`) y en Electricity, el `DriftRegressor` original sigue siendo mejor.
+
+**Limitaciones:** las semillas 3–5 usan los mismos 11 generadores con los que se diseñó `AdaptiveDriftForest`; validan frente a otro ruido, no frente a tipos de drift nuevos. Los datasets reales tampoco son una validación independiente. Aún no hay intervalos de incertidumbre ni tuning de `beta` para el modelo nuevo.
+
+```python
+from src.drift_adaptive_forest.models.adaptive_ensemble import AdaptiveDriftForest
+
+modelo = AdaptiveDriftForest(weighting="error", beta=20.0, random_state=42)
+modelo.fit(X_train, y_train)      # X ordenado en el tiempo (o pasar timestamps=)
+modelo.predict(X_nuevo)           # funciona con una sola fila
+modelo.weights_summary()          # p. ej. {'ventana_0.10': 1.0}
+```
+
 ---
 
 ## Instalación y Uso Rápido
@@ -120,20 +156,44 @@ python -m experiments.tune_and_compare
 ```text
 DriftAdaptiveForest/
 ├── data/raw/                              # Datasets sintéticos (.parquet)
-├── experiments/tune_and_compare.py        # Benchmark y tuning con Optuna + TimeSeriesSplit
+├── experiments/
+│   ├── tune_and_compare.py                # Benchmark y tuning con Optuna + TimeSeriesSplit
+│   ├── benchmark_drift.py                 # Benchmark estático y walk-forward (sintético + real)
+│   ├── synthetic_scenarios.py             # 11 escenarios sintéticos con distintos tipos de drift
+│   ├── real_datasets.py                   # 5 datasets reales (UCI / OpenML)
+│   ├── tune_benchmark.py                  # Tuning con Optuna en 10 datasets
+│   ├── summarize_benchmark.py             # Tablas resumen (summary.md, summary_holdout.md)
+│   ├── finance_data.py                    # Descarga Yahoo Finance + BCRPData (sin API key)
+│   ├── finance_experiment.py              # Experimento de volatilidad con embargo y HAR / HAR-X
+│   ├── graficar_analisis.py               # Figuras con la paleta CCDE (experiments/figuras/)
+│   ├── BITACORA.md                        # Registro paso a paso del trabajo
+│   └── results/                           # CSV de resultados y resúmenes
 ├── src/drift_adaptive_forest/
 │   ├── data/generate_data.py              # Simulador clínico con Data y Concept Drift
 │   ├── metrics/mmd.py                     # Estimador empírico de MMD^2 (RBF + heurística mediana)
-│   └── models/block_ensemble.py           # Estrategia B: DriftRegressor compatible con sklearn
+│   └── models/
+│       ├── block_ensemble.py              # Estrategia B: DriftRegressor compatible con sklearn
+│       └── adaptive_ensemble.py           # AdaptiveDriftForest: ventanas recientes + pesos fijos
+├── CONCLUSIONES.md                        # Diagnóstico del DriftRegressor original
+├── MEJORAS.md                             # AdaptiveDriftForest y sus resultados
+├── FINANZAS.md                            # Experimento de volatilidad en 13 series financieras
+├── MACRO.md                               # Macro mensual FRED + EPU
+├── MATRICULA.md                           # Demanda de matrícula universitaria (IPEDS)
+├── ESPECIFICACION_PENDIENTES.md           # Críticas, tareas y reglas para continuar el desarrollo
+├── paper/                                 # Documento académico (main.tex original y main_v2.tex)
 ├── requirements.txt
 └── README.md
 ```
+
+> `data/real/` (datasets reales descargados) no se versiona. Para recrearla, ver las URLs en `experiments/real_datasets.py`.
 
 * [x] **Paso 1:** Generador sintético con Data Drift y Concept Drift (`generate_data.py`).
 * [x] **Paso 2:** Estimador $\widehat{\text{MMD}}^2$ con kernel RBF y heurística de la mediana (`mmd.py`).
 * [x] **Paso 3:** Estrategia B — `DriftRegressor` con modos `"mmd"`, `"recent_error"` y `"hybrid"` (`block_ensemble.py`).
 * [x] **Paso 4:** Optimización y validación temporal con Optuna + `TimeSeriesSplit` (`tune_and_compare.py`).
-* [ ] **Paso 5 (Próximo):** Estrategia A — Bootstrap Temporal Probabilístico ($w_i = e^{-\alpha \Delta t_i}$ con control de ESS).
+* [x] **Paso 4b:** Benchmark ampliado (16 datasets, 2 protocolos, líneas base de recencia) y `AdaptiveDriftForest` (ver más abajo).
+* [ ] **Paso 4c (Próximo):** Intervalos de incertidumbre (conformal adaptativo) y tuning de `beta` con validación temporal.
+* [ ] **Paso 5:** Estrategia A — Bootstrap Temporal Probabilístico ($w_i = e^{-\alpha \Delta t_i}$ con control de ESS).
 * [ ] **Paso 6 (Experimental):** Prototipo de **MMD-Split** en los primeros niveles del árbol usando *Random Fourier Features* (RFF):
   $$\mathcal{L}_{\text{hibrida}}(j, s) = \mathcal{L}_{\text{MSE}}(S_L, S_R) + \eta \cdot \Omega_{\text{MMD}}(S_L, S_R, R)$$
 

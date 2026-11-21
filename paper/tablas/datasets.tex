@@ -1,0 +1,26 @@
+% Generado por paper/generar_tablas.py. No editar a mano.
+\begin{tabularx}{\textwidth}{l X r r r r r}
+\toprule
+Dataset & Tipo de drift & {$n$} & {$p$} & {AUC} & {CG} & {RR} \\
+\midrule
+\multicolumn{7}{l}{\textit{Sintéticos (3 semillas cada uno)}} \\
+\texttt{healthcare\_none} & Ninguno (control) & 5000 & 4 & 0.49 & 0.01 & 1.04 \\
+\texttt{healthcare\_data} & Data & 5000 & 4 & 0.78 & 0.01 & 1.08 \\
+\texttt{healthcare\_concept} & Concept gradual & 5000 & 4 & 0.49 & 0.57 & 1.81 \\
+\texttt{healthcare\_both} & Data + concept & 5000 & 4 & 0.78 & 0.57 & 1.79 \\
+\texttt{friedman\_abrupt} & Concept abrupto & 5000 & 10 & 0.52 & 0.25 & 1.60 \\
+\texttt{friedman\_gradual\_data} & Data + concept gradual & 5000 & 10 & 0.99 & 0.06 & 1.89 \\
+\texttt{friedman\_recurring} & Concept recurrente & 5000 & 10 & 0.71 & 0.04 & 1.00 \\
+\texttt{covariate\_shift} & Data fuerte (2$\sigma$) & 5000 & 8 & 0.97 & -0.01 & 2.00 \\
+\texttt{highdim\_mixed} & Data + concept mixto & 5000 & 20 & 0.90 & 0.33 & 1.29 \\
+\texttt{local\_drift} & Concept local & 5000 & 6 & 0.50 & 0.44 & 1.83 \\
+\texttt{incremental} & Concept incremental & 5000 & 10 & 0.50 & 0.03 & 1.35 \\
+\addlinespace
+\multicolumn{7}{l}{\textit{Reales}} \\
+\texttt{air\_quality} & Deriva de sensores & 7344 & 10 & 1.00 & 0.03 & 0.95 \\
+\texttt{bike\_sharing} & Contexto oculto + estacional & 17379 & 11 & 0.97 & 0.38 & 1.24 \\
+\texttt{gas\_drift} & Deriva de sensores fuerte & 13910 & 134 & 1.00 & 0.01 & 1.92 \\
+\texttt{beijing\_pm25} & Estacional + emisiones & 13919 & 12 & 0.82 & 0.15 & 1.02 \\
+\texttt{electricity} & Mercado eléctrico & 15104 & 6 & 1.00 & 0.41 & 1.42 \\
+\bottomrule
+\end{tabularx}

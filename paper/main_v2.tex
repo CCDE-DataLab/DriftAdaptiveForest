@@ -1,0 +1,1238 @@
+% DriftAdaptiveForest: documento académico para el Círculo de Ciencia de Datos y Econometría (CCDE).
+% Compilar con: latexmk -pdf main.tex   (o en Overleaf, compilador pdfLaTeX + biber)
+% Las tablas y las cifras del texto se generan con: python paper/generar_tablas.py
+% Versión 2: tablas y cifras nuevas con python paper/generar_tablas_v2.py (tablas/v2_*.tex, tablas/cifras_v2.tex)
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[spanish,es-noshorthands,es-nodecimaldot,es-tabla]{babel}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{setspace}\onehalfspacing
+\usepackage{csquotes}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs,tabularx}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage[hidelinks]{hyperref}
+\usepackage[spanish,capitalise,noabbrev]{cleveref}
+\usepackage[style=apa,backend=biber]{biblatex}
+\addbibresource{referencias_v2.bib}
+
+\floatname{algorithm}{Algoritmo}
+\renewcommand{\algorithmicrequire}{\textit{Entrada:}}
+\renewcommand{\algorithmicensure}{\textit{Salida:}}
+\crefname{algorithm}{Algoritmo}{Algoritmos}
+\crefname{table}{Tabla}{Tablas}
+\crefname{figure}{Figura}{Figuras}
+\crefname{appendix}{Apéndice}{Apéndices}
+
+\setlength{\emergencystretch}{3em}  % evita desbordes por nombres largos en \texttt
+\newcommand{\MMD}{\operatorname{MMD}}
+\newcommand{\MSE}{\operatorname{MSE}}
+\newcommand{\RMSE}{\operatorname{RMSE}}
+\newcommand{\nota}[1]{\par\smallskip\raggedright\footnotesize\textit{Nota.} #1}
+
+\input{tablas/cifras.tex}
+\input{tablas/cifras_v2.tex}
+
+\title{Bosques aleatorios adaptativos al drift:\\ ensambles por ventanas temporales para regresión no estacionaria}
+\author{Mauricio Aguirre Stornaiuolo \and Piero Alexander Simeon Bustillos\\[4pt]
+  \small Círculo de Ciencia de Datos y Econometría (CCDE)}
+\date{Noviembre de 2026}
+
+\begin{document}
+
+\begin{titlepage}
+  \centering
+  \includegraphics[width=0.28\textwidth]{logo_ccde.jpeg}\par\vspace{1.5cm}
+  {\LARGE Bosques aleatorios adaptativos al drift:\par}
+  \vspace{0.3cm}
+  {\Large ensambles por ventanas temporales para regresión no estacionaria\par}
+  \vspace{1.5cm}
+  {\large Mauricio Aguirre Stornaiuolo\par Piero Alexander Simeon Bustillos\par}
+  \vspace{1cm}
+  {\large Círculo de Ciencia de Datos y Econometría (CCDE)\par}
+  \vspace{0.5cm}
+  {Documento de trabajo, versión 2\par Noviembre de 2026\par}
+\end{titlepage}
+
+\begin{abstract}
+\noindent Un bosque aleatorio entrenado con todo el histórico promedia regímenes que ya no rigen cuando
+cambia la distribución de las covariables (data drift) o la relación entre covariables y objetivo
+(concept drift). Este trabajo evalúa dos ensambles de bosques aleatorios para regresión temporal: el
+\texttt{DriftRegressor}, que pondera sub-bosques por bloque temporal según la discrepancia de media
+máxima (MMD) o el error reciente, y el \texttt{AdaptiveDriftForest}, que elige entre ventanas recientes
+anidadas según el error normalizado y reentrena con los datos más nuevos. La evaluación usa 11
+escenarios sintéticos y 5 conjuntos reales, protocolos temporales estrictos, líneas base de recencia y
+métodos de la literatura (Adaptive Random Forest, Hoeffding Adaptive Tree y LightGBM), además de una
+validación externa con hipótesis registradas antes de cada experimento en demanda de matrícula
+universitaria, volatilidad financiera y macroeconomía mensual. El \texttt{DriftRegressor} solo mejora al
+bosque convencional bajo concept drift y es superado por una ventana reciente en \hTresRFV{} de
+\hTresN{} escenarios. El \texttt{AdaptiveDriftForest} reduce el RMSE de walk-forward sintético a
+\rADFeSintWalk{} veces el del bosque convencional y supera ahí a los métodos de la literatura, pero en
+los datos reales LightGBM tiene menor error medio. En la validación externa supera al bosque
+convencional en la demanda de matrícula (\VmatAdfVsRF{} de \VmatN{} cortes) y no lo hace en volatilidad
+ni en macroeconomía, donde un modelo lineal con las mismas covariables supera a todos los árboles y
+recortar la memoria empeora el pronóstico. El método conviene cuando el cambio es persistente, hay
+muchas observaciones y la relación es no lineal, y su costo de cómputo es dos órdenes de magnitud mayor
+que el de LightGBM.
+\end{abstract}
+
+\noindent\textit{Palabras clave:} concept drift, data drift, bosques aleatorios, ensambles temporales,
+discrepancia de media máxima, validación walk-forward, pronóstico de demanda, volatilidad realizada.
+
+\newpage
+\tableofcontents
+\newpage
+
+% =====================================================================================
+\section{Introducción}\label{sec:intro}
+
+En el conjunto sintético de estancias hospitalarias que motivó este proyecto, un cambio de protocolo
+clínico alrededor del 60\,\% de la muestra altera la relación entre la severidad del paciente y los
+días de estancia. Un bosque aleatorio (RF) entrenado con los primeros 4\,000 ingresos obtiene un RMSE
+de 6.40 días sobre los 1\,000 siguientes. En promedio sobre tres réplicas del mismo escenario, un RF
+entrenado solo con el 20\,\% más reciente del histórico tiene un error de \xRFVHealthcareBothStatic{}
+veces el del RF con todo el histórico (\cref{tab:sint-static}). La diferencia no viene de la
+capacidad del modelo, sino de qué datos se le dan.
+
+La \cref{fig:motivacion} muestra los dos cambios que ocurren en ese escenario. En el panel (a), la
+severidad media de los pacientes que ingresan sube y oscila con el tiempo: cambia el tipo de paciente
+que llega. En el panel (b), para una misma severidad, los días de estancia dependen de la época: con
+el protocolo antiguo la estancia apenas responde a la severidad, mientras que con el nuevo crece casi
+en línea recta. Un modelo entrenado con todo el histórico aprende un promedio de ambas reglas, que no
+describe ninguna de las dos.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\textwidth]{figuras/motivacion_drift.pdf}
+  \caption{Los dos tipos de drift en el escenario hospitalario}\label{fig:motivacion}
+  \nota{(a) Severidad al ingreso de cada paciente (puntos) y su media móvil de 250 ingresos (línea);
+  las bandas marcan el primer 40\,\% y el último 20\,\% de la muestra. (b) Días de estancia medios por
+  intervalo de severidad en esos dos tramos (intervalos con al menos 15 pacientes). \textit{Fuente:}
+  \texttt{data/raw/healthcare\_both\_drift.parquet}, generado con \texttt{generate\_data.py}.}
+\end{figure}
+
+El mismo problema aparece en muchos contextos aplicados. Un modelo de riesgo crediticio entrenado en
+un periodo de tasas bajas puede asignar a un mismo perfil de cliente una probabilidad de mora que deja
+de ser válida cuando la política monetaria se endurece. Un modelo de demanda de un comercio minorista
+aprende patrones de compra que cambian tras un evento como una pandemia o la llegada de un canal
+digital. Un sensor químico se degrada con los meses y su lectura deja de corresponder a la misma
+concentración, que es el caso de dos de los conjuntos reales de este trabajo. En un mercado eléctrico,
+un cambio regulatorio altera la relación entre precio y demanda. En econometría el fenómeno tiene un
+nombre conocido, el cambio estructural: los parámetros de la relación entre variables cambian en
+fechas desconocidas, y existe una tradición de pruebas para detectarlo
+\parencite{andrews1993,baiperron1998}. La diferencia en aprendizaje automático es que la relación no
+es lineal ni paramétrica, y que el objetivo no es fechar el quiebre, sino predecir bien después de
+él.
+
+Este fenómeno se conoce como drift. La literatura distingue el cambio en la distribución de las
+covariables, $P(X)$, llamado data drift o covariate shift, del cambio en la distribución condicional
+$P(Y\mid X)$, llamado concept drift \parencite{gama2014,morenotorres2012}. Un RF clásico
+\parencite{breiman2001} enfrenta ambos con dos limitaciones: el muestreo bootstrap uniforme mezcla
+observaciones de todas las épocas en cada árbol, y los árboles no extrapolan fuera del rango
+observado ni distinguen regímenes que asignan respuestas distintas a una misma región de $X$.
+
+La respuesta habitual de la literatura de flujos de datos es el ensamble de modelos entrenados en
+distintos tramos del pasado, con pesos que se actualizan según su desempeño reciente
+\parencite{kolter2007,elwell2011,gomes2017}. Esa literatura se concentra en clasificación y en
+aprendizaje en línea. En regresión por lotes, que es el caso típico de un analista que reentrena un
+modelo cada cierto tiempo, la pregunta práctica es más simple: dado un histórico ordenado en el
+tiempo, ¿qué subconjunto o qué combinación de modelos entrenados en ese histórico predice mejor el
+futuro inmediato?
+
+Este documento responde esa pregunta para dos propuestas desarrolladas en el CCDE. La primera, el
+\texttt{DriftRegressor}, divide el histórico en $K$ bloques, entrena un RF por bloque y combina sus
+predicciones con pesos que penalizan la distancia MMD \parencite{gretton2012} entre cada bloque y los
+datos a predecir, el error del bloque sobre el tramo más reciente o ambas. La segunda, el
+\texttt{AdaptiveDriftForest}, se diseñó después de evaluar la primera y corrige los problemas que esa
+evaluación encontró.
+
+La pregunta general es si un ensamble de bosques ponderado por bloques temporales predice mejor que
+un RF convencional y que las líneas base triviales de recencia cuando hay drift. Las preguntas
+específicas son: (P1) ¿mejora el \texttt{DriftRegressor} al RF convencional bajo concept drift?; (P2)
+¿lo mejora cuando solo hay data drift?; (P3) ¿su ventaja proviene de la ponderación por bloques o
+basta con entrenar con datos recientes?; (P4) ¿corrige el \texttt{AdaptiveDriftForest} las
+debilidades encontradas sin perder frente al RF cuando no hay drift?; (P5) ¿cómo se compara con
+métodos de la literatura de flujos de datos y con gradient boosting?; y (P6) ¿se sostienen sus
+resultados en dominios que no se usaron durante su diseño?
+
+Los resultados principales son tres. El \texttt{DriftRegressor} mejora al RF convencional solo cuando
+hay concept drift y empeora cuando solo hay data drift. Un RF entrenado con el 20\,\% más reciente del
+histórico lo supera en la mayoría de escenarios, lo que indica que gran parte de la ganancia atribuida
+a la ponderación por bloques es un efecto de recencia. El \texttt{AdaptiveDriftForest}, que incluye
+esas ventanas recientes entre sus candidatos, es el modelo con mejor rango medio en los cuatro cortes
+evaluados, con una ventaja clara en los datos sintéticos y modesta en los reales. La comparación con
+métodos de la literatura y la validación externa matizan ese resultado: LightGBM tiene menor error medio
+en los datos reales, y en volatilidad financiera y macroeconomía mensual un modelo lineal supera a todos
+los árboles. El \texttt{AdaptiveDriftForest} solo mejora con claridad al bosque convencional cuando el
+cambio es persistente y hay muchas observaciones, como en la demanda de matrícula universitaria. El aporte del
+trabajo es metodológico: un protocolo de evaluación temporal con líneas base de recencia y un
+diagnóstico de drift independiente de los modelos, que cambia la lectura de los resultados
+publicados en la primera versión del repositorio.
+
+% =====================================================================================
+\section{Marco teórico}\label{sec:marco}
+
+\subsection{Tipos de drift}
+
+Sea $(X_t, Y_t)$ un proceso con distribución conjunta $P_t(X,Y) = P_t(X)\,P_t(Y\mid X)$. Hay drift
+entre los instantes $t$ y $t'$ cuando $P_t(X,Y)\neq P_{t'}(X,Y)$
+\parencite{gama2014,lu2019}. La descomposición separa dos casos con consecuencias distintas para un
+modelo predictivo:
+
+\begin{itemize}
+  \item Data drift (covariate shift): $P_t(X)$ cambia y $P_t(Y\mid X)$ se mantiene. La función que
+  se quiere aprender es la misma, pero el modelo debe predecir en regiones de $X$ poco representadas
+  en el entrenamiento. La corrección clásica pondera las observaciones por el cociente de densidades
+  $P_{\text{test}}(x)/P_{\text{train}}(x)$ \parencite{shimodaira2000}.
+  \item Concept drift: $P_t(Y\mid X)$ cambia. Las observaciones antiguas enseñan una función que ya no
+  rige, y usarlas sesga la predicción. \textcite{widmer1996} lo vinculan a contextos ocultos, es decir,
+  variables no observadas cuyo cambio altera la relación entre $X$ e $Y$.
+\end{itemize}
+
+Según su dinámica, el concept drift puede ser abrupto, gradual, incremental o recurrente, en cuyo
+caso un régimen antiguo vuelve a regir \parencite{gama2014}. Esta distinción importa para el diseño
+de un ensamble: ante drift abrupto o incremental, lo mejor suele ser olvidar el pasado; ante drift
+recurrente, conviene conservar modelos de regímenes antiguos para reutilizarlos.
+
+\subsection{Discrepancia de media máxima}
+
+La discrepancia de media máxima (MMD) mide la distancia entre dos distribuciones $P$ y $Q$ como la
+distancia entre sus inmersiones medias en un espacio de Hilbert de kernel reproductor
+\parencite{gretton2012}. Con un kernel $k$, su estimador insesgado para muestras
+$\{x_i\}_{i=1}^n\sim P$ y $\{z_j\}_{j=1}^m\sim Q$ es
+\begin{equation}\label{eq:mmd}
+\widehat{\MMD}^2 = \frac{1}{n(n-1)}\sum_{i\neq i'} k(x_i,x_{i'})
++ \frac{1}{m(m-1)}\sum_{j\neq j'} k(z_j,z_{j'})
+- \frac{2}{nm}\sum_{i,j} k(x_i,z_j).
+\end{equation}
+Este trabajo usa el kernel gaussiano $k(x,z)=\exp(-\gamma\lVert x-z\rVert^2)$ con
+$\gamma = 1/(2\,\mathrm{med})$, donde $\mathrm{med}$ es la mediana de las distancias euclidianas al
+cuadrado entre puntos de ambas muestras (heurística de la mediana), sobre covariables estandarizadas.
+La MMD solo compara distribuciones de $X$: detecta data drift, pero no concept drift puro, porque no
+usa $Y$.
+
+\subsection{Ensambles y recencia}
+
+Los ensambles para entornos no estacionarios mantienen varios modelos entrenados en distintos tramos
+y ajustan sus pesos según el error reciente. Dynamic Weighted Majority \parencite{kolter2007} y
+Learn++.NSE \parencite{elwell2011} son ejemplos en clasificación; Adaptive Random Forests
+\parencite{gomes2017} combina detectores de cambio con reemplazo de árboles en flujos de datos. Una
+alternativa más simple es ajustar el tamaño de la ventana de entrenamiento, como hace ADWIN
+\parencite{bifet2007}; el Hoeffding Adaptive Tree \parencite{bifet2009} lleva esa ventana adaptativa a
+cada nodo de un árbol que aprende en línea y reemplaza los subárboles cuyo error cambia. En regresión con árboles, \textcite{ikonomovska2011} proponen árboles de modelo
+para flujos con drift y definen variantes de la función de \textcite{friedman1991} que se usan aquí
+como escenarios de prueba.
+
+De esta literatura se derivan dos predicciones para los modelos evaluados. Primero, si $P(Y\mid X)$
+cambia, un modelo que concentra el peso en el pasado reciente debería predecir mejor que uno que
+promedia toda la historia. Segundo, si solo cambia $P(X)$, descartar datos antiguos reduce la muestra
+sin corregir ningún sesgo, de modo que no debería mejorar al modelo con toda la historia.
+
+\subsection{Pronóstico con inestabilidad en economía y finanzas}\label{sec:marco-econ}
+
+En econometría, la pregunta de cuánta historia usar se estudia como la elección de la ventana de
+estimación ante quiebres. \textcite{pesaran2007} muestran que, aun con un quiebre, la ventana óptima
+puede incluir observaciones anteriores a él, porque la reducción de varianza compensa parte del
+sesgo: descartar todo el pasado no es la regla general. En los dominios de la validación externa de
+este trabajo hay modelos lineales de referencia bien establecidos. En volatilidad realizada, el modelo
+HAR de \textcite{corsi2009} regresa la volatilidad futura sobre sus promedios de uno, cinco y 22 días y
+reproduce la memoria larga de la serie con pocos parámetros. En pronóstico macroeconómico con muchos
+predictores, los índices de difusión de \textcite{stockwatson2002} resumen el panel con componentes
+principales y los añaden a un modelo autorregresivo, y la base FRED-MD de \textcite{mccracken2016}
+estandariza las transformaciones de ese tipo de panel. En demanda, el suavizamiento exponencial con
+tendencia amortiguada \parencite{gardner1985} extrapola la tendencia reciente atenuándola con el
+horizonte.
+
+% =====================================================================================
+\section{Metodología}\label{sec:metodo}
+
+\subsection{DriftRegressor}\label{sec:dr}
+
+Sea $\{(x_i,y_i)\}_{i=1}^{N}$ el histórico ordenado en el tiempo. El \texttt{DriftRegressor} lo
+divide en $K$ bloques contiguos $W_1,\dots,W_K$ de igual tamaño y entrena un RF $f_k$ en cada uno. La
+predicción es la combinación convexa
+\begin{equation}\label{eq:softmax}
+\hat y(x) = \sum_{k=1}^{K}\lambda_k f_k(x),\qquad
+\lambda_k = \frac{\exp(-\beta p_k)}{\sum_{j=1}^{K}\exp(-\beta p_j)},
+\end{equation}
+donde $p_k$ es una penalización por bloque y $\beta>0$ controla qué tan concentrados quedan los pesos.
+Hay tres modos de penalización:
+\begin{itemize}
+  \item \texttt{mmd}: $p_k=\max\{0,\widehat{\MMD}^2(X_{W_k},X_{\text{test}})\}$, calculada contra el
+  lote que se va a predecir.
+  \item \texttt{recent\_error}: se reserva el 15\,\% más reciente del histórico, $W_{\text{val}}$, los
+  bloques se forman con el resto y $p_k = e_k/\bar e$, con $e_k=\MSE(f_k,W_{\text{val}})$.
+  \item \texttt{hybrid}: $p_k = \alpha\,\MMD^2_k/\overline{\MMD^2} + (1-\alpha)\,e_k/\bar e$.
+\end{itemize}
+La configuración por defecto evaluada es $K=5$, $\beta=15$ y 100 árboles por bloque.
+
+\subsection{AdaptiveDriftForest}\label{sec:adf}
+
+El \texttt{AdaptiveDriftForest} se diseñó tras la primera ronda de experimentos (\cref{sec:res-dr})
+para corregir cuatro problemas del \texttt{DriftRegressor}: cada bloque ve solo $1/K$ de los datos;
+el tramo más reciente nunca se usa para entrenar en los modos \texttt{recent\_error} e
+\texttt{hybrid}; la escala de la MMD hace que $\beta$ signifique cosas distintas en cada conjunto de
+datos; y en el modo \texttt{mmd} la predicción de una fila depende de qué otras filas llegan en el
+mismo lote. Sus cambios son los siguientes:
+
+\begin{enumerate}
+  \item Candidatos que contienen a las líneas base. Además de los $K$ bloques, se entrenan ventanas
+  recientes anidadas con fracciones $\mathcal F=\{0.10,0.20,0.35,0.60,1.00\}$ del histórico. La
+  ventana del 100\,\% es el RF convencional y las cortas son RF de ventana, de modo que el ensamble
+  puede reducirse a la mejor línea base si eso es lo que mejor predice.
+  \item Penalización por error normalizado por el mínimo: $p_c = e_c/\min_j e_j$. Así $\beta$ tiene el
+  mismo significado en cualquier conjunto: con $\beta=20$, un candidato con un error 5\,\% mayor que
+  el del mejor recibe $e^{-1}$ veces su peso.
+  \item Reentrenamiento con la cola reciente. Los pesos se estiman con modelos que no vieron el 15\,\%
+  final; después, los candidatos con peso positivo se reentrenan incluyéndolo.
+  \item Pesos fijos desde el ajuste. La predicción no depende del lote de test y funciona fila a fila.
+  El modo \texttt{hybrid} opcional añade la MMD entre cada candidato y la cola reciente, no contra el
+  test.
+\end{enumerate}
+
+El \cref{alg:adf} resume el procedimiento. Los valores por defecto son $\beta=20$, $K=5$, cola de
+validación del 15\,\% (mínimo 30 observaciones), peso mínimo $10^{-3}$ y, en modo \texttt{hybrid},
+$\alpha=0.3$.
+
+\begin{algorithm}[htbp]
+\caption{Ajuste del \texttt{AdaptiveDriftForest} (modo \texttt{error})}\label{alg:adf}
+\begin{algorithmic}[1]
+\Require Histórico ordenado $\{(x_i,y_i)\}_{i=1}^N$; fracciones $\mathcal F$; bloques $K$; $\beta$
+\State $v \gets \max(30,\lfloor 0.15N\rfloor)$, \quad $n \gets N-v$ \Comment{cola reciente $[n,N)$}
+\State $\mathcal C \gets$ ventanas $[n-\lfloor fn\rceil,\,n)$ para $f\in\mathcal F$ $\cup$ bloques contiguos de $[0,n)$
+\For{cada candidato $c\in\mathcal C$}
+  \State entrenar un RF $g_c$ en el tramo de $c$; \quad $e_c \gets \MSE(g_c,\ \text{cola})$
+\EndFor
+\State $p_c \gets e_c/\min_j e_j$; \quad $\lambda_c \propto \exp\{-\beta(p_c-\min_j p_j)\}$
+\State anular $\lambda_c<10^{-3}$ y renormalizar
+\For{cada $c$ con $\lambda_c>0$}
+  \State reentrenar $g_c$ desplazando las ventanas al final de $[0,N)$ y extendiendo el último bloque
+\EndFor
+\Ensure $\hat y(x)=\sum_c \lambda_c\, g_c(x)$
+\end{algorithmic}
+\end{algorithm}
+
+La \cref{fig:candidatos} compara los candidatos de ambos modelos. El \texttt{DriftRegressor} solo
+dispone de los cinco bloques, cada uno con una quinta parte de los datos; el
+\texttt{AdaptiveDriftForest} añade las ventanas anidadas, todas terminadas en el presente, desde la
+más corta, que solo ve el régimen actual, hasta la más larga, que equivale al RF convencional.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.95\textwidth]{figuras/candidatos.pdf}
+  \caption{Modelos candidatos sobre el eje del tiempo}\label{fig:candidatos}
+  \nota{Cada barra es el tramo del histórico con que se entrena un RF candidato. La cola reciente se
+  usa primero para estimar los pesos y luego se incorpora al reentrenar. En el
+  \texttt{DriftRegressor} en modo \texttt{mmd} no hay cola reciente y los bloques cubren todo el
+  histórico.}
+\end{figure}
+
+\subsection{Líneas base}
+
+Todos los modelos usan bosques de 100 árboles con profundidad libre, con la implementación de
+scikit-learn \parencite{pedregosa2011}. Las líneas base son tres: el RF convencional entrenado con todo el
+histórico, que es la referencia (RF); un RF entrenado solo con el 20\,\% más reciente, con un mínimo de
+200 observaciones (RF-V); y un RF con pesos muestrales exponenciales $w_i = 0.5^{a_i/0.2}$, donde
+$a_i\in[0,1)$ es la antigüedad relativa de la observación, lo que equivale a una vida media del
+20\,\% del histórico (RF-E). En las tablas, DR-M, DR-R y DR-H son el \texttt{DriftRegressor} en
+modos \texttt{mmd}, \texttt{recent\_error} e \texttt{hybrid}, y ADF-E y ADF-H son el
+\texttt{AdaptiveDriftForest} en modos \texttt{error} e \texttt{hybrid}. DR-R+ es una variante
+experimental de DR-R que reentrena el último bloque incluyendo la cola de validación; se usó para
+aislar el efecto de ese cambio y solo aparece en la \cref{tab:agregado}.
+
+\subsection{Modelos de comparación adicionales}\label{sec:otros}
+
+Para responder P5 se añadieron cinco modelos. Adaptive Random Forest (ARF) para regresión
+\parencite{gomes2017}, con 10 árboles y los detectores de cambio por defecto, y Hoeffding Adaptive Tree
+(HAT) para regresión \parencite{bifet2009}, ambos de la biblioteca River \parencite{montiel2021} y
+precedidos de una estandarización en línea. Estos modelos aprenden fila a fila: en cada origen reciben
+en orden temporal todas las filas anteriores y predicen el bloque de prueba sin aprender de él, lo que
+equivale a reentrenarlos en cada origen como a los modelos por lotes. LightGBM \parencite{ke2017}, con
+sus parámetros por defecto, representa al gradient boosting, el método más usado en la práctica para
+pronóstico con datos tabulares. Finalmente, dos variantes prueban en versión simplificada la idea de
+divisiones de árbol sensibles al drift (\cref{sec:futuro}): RF+t, un RF que recibe el tiempo como
+covariable adicional, y Part3+RF, un árbol de tres niveles sobre $[X,t]$ con hoja mínima del 5\,\%
+que define hasta ocho regiones, con un RF convencional dentro de cada una. En ambas, los datos futuros
+tienen un $t$ mayor que todo el entrenamiento y caen en la rama más reciente de cualquier división
+temporal.
+
+\subsection{Protocolos de evaluación}
+
+Ambos protocolos son estrictamente temporales: ningún modelo ve datos posteriores a los que predice
+\parencite{tashman2000}.
+\begin{itemize}
+  \item Partición 80/20: entrenamiento con el primer 80\,\% y evaluación en el 20\,\% final. Es el
+  protocolo de la primera versión del repositorio.
+  \item Walk-forward con ventana expansiva: seis reentrenamientos con orígenes en el 40, 50, \ldots,
+  90\,\% de la muestra; en cada uno se entrena con todo el pasado y se evalúa en el 10\,\% siguiente.
+\end{itemize}
+
+Los escenarios sintéticos se generan con tres semillas (0, 1 y 2); los datos reales se evalúan con la
+semilla 0. La métrica principal es el cociente entre el RMSE de cada modelo y el del RF convencional
+en el mismo paso y la misma semilla. Para cada conjunto de datos se resume con la media geométrica
+sobre semillas y pasos, y el agregado es la media geométrica sobre conjuntos. Un cociente menor que 1
+indica un error menor que el del RF. Se reportan además el número de conjuntos en que el cociente es
+menor que 1, el porcentaje de pasos individuales en que el modelo gana al RF y el rango medio por
+RMSE entre los nueve modelos. La significancia se evalúa con la prueba de rangos con signo de
+\textcite{wilcoxon1945} sobre el logaritmo del cociente medio de cada conjunto, una observación por
+conjunto, como recomienda \textcite{demsar2006} para comparar algoritmos en varios conjuntos de
+datos. Con cinco conjuntos reales, el menor valor $p$ bilateral que puede alcanzar esa prueba es
+$2/2^5=0.0625$, de modo que en los datos reales ninguna diferencia puede ser significativa al 5\,\%.
+
+\subsection{Optimización de hiperparámetros}
+
+Para comprobar que las conclusiones no dependen de la configuración por defecto, se optimizaron con
+Optuna \parencite{akiba2019} tres familias (RF, RF-V y \texttt{DriftRegressor}) en diez conjuntos, con
+20 ensayos por familia y validación cruzada temporal de 4 particiones (\texttt{TimeSeriesSplit})
+dentro del 80\,\% de entrenamiento. El espacio de búsqueda incluye profundidad máxima (4 a 20), mínimo
+de observaciones por hoja (1 a 10) y fracción de variables por división (0.5 a 1); para RF-V, la
+fracción de la ventana (0.05 a 1); y para el \texttt{DriftRegressor}, $K\in\{3,\dots,8\}$,
+$\beta\in[2,60]$ en escala logarítmica, el modo de ponderación, la fracción de validación (0.10 a
+0.25) y $\alpha$ (0.1 a 0.9). El \texttt{AdaptiveDriftForest} no se optimizó.
+
+\subsection{Hipótesis y criterios de veredicto}\label{sec:hipotesis}
+
+Las hipótesis corresponden a las premisas con que se diseñó el \texttt{DriftRegressor} y a los
+objetivos con que se diseñó su sucesor. Se juzgan en el protocolo walk-forward de los escenarios
+sintéticos, que tiene más repeticiones, y se contrastan con los datos reales.
+
+\begin{description}
+  \item[H1.] Bajo concept drift, el \texttt{DriftRegressor} en modo \texttt{recent\_error} tiene menor
+  RMSE que el RF convencional.
+  \item[H2.] Cuando solo cambia $P(X)$, el \texttt{DriftRegressor} en modo \texttt{mmd} tiene menor
+  RMSE que el RF convencional.
+  \item[H3.] La ventaja del \texttt{DriftRegressor} proviene de la ponderación por bloques: su mejor
+  modo tiene menor RMSE que las líneas base de recencia (RF-V y RF-E).
+  \item[H4.] El \texttt{AdaptiveDriftForest} tiene menor RMSE que el RF convencional y que las líneas
+  base de recencia, y no es peor que el RF cuando no hay concept drift.
+\end{description}
+
+Una hipótesis se considera apoyada si el cociente agregado es menor que 1 y el modelo gana en la
+mayoría de los conjuntos correspondientes; apoyada en parte si se cumple solo una de las dos
+condiciones o solo en un subconjunto; y no apoyada si no se cumple ninguna. Cuando el número de
+conjuntos lo permite, se reporta además el valor $p$ de Wilcoxon. H4 se formuló después de observar
+los resultados de H1 a H3 y se evalúa sobre los mismos conjuntos, lo que limita su alcance
+(\cref{sec:limitaciones}).
+
+\subsection{Validación externa con hipótesis registradas}\label{sec:hip-externa}
+
+Para atender esa limitación se hicieron cinco experimentos adicionales (\cref{sec:datos-externos}).
+En cada uno, el diseño, los modelos y las hipótesis se escribieron en la bitácora del repositorio
+(\texttt{experiments/BITACORA.md}) antes de ejecutarlo y no se cambiaron después de ver los resultados.
+Las hipótesis H5 a H18 se resumen en la \cref{tab:veredictos-v2}. Salvo que se indique otra cosa, una
+hipótesis se considera apoyada si la prueba de signo bilateral sobre los bloques o cortes de evaluación
+da $p<0.05$ en la dirección anticipada. Esa prueba no tiene en cuenta la magnitud de las diferencias
+ni la correlación entre bloques de una misma serie, por lo que sus valores $p$ son indicativos.
+
+% =====================================================================================
+\section{Datos}\label{sec:datos}
+
+\subsection{Escenarios sintéticos}
+
+Los 11 escenarios sintéticos tienen 5\,000 observaciones ordenadas por un reloj normalizado
+$t\in[0,1]$ y cubren los tipos de drift de la \cref{sec:marco}:
+
+\begin{itemize}
+  \item Cuatro variantes del simulador hospitalario del repositorio, con objetivo días de estancia y
+  covariables edad, comorbilidades, severidad al ingreso y ocupación hospitalaria: sin drift (control),
+  solo data drift (medias con tendencia y estacionalidad), solo concept drift, y ambos. El concept
+  drift es una transición sigmoide entre dos funciones de estancia,
+  \begin{equation}\label{eq:sigmoide}
+  y_t = (1-\alpha_t)\, f_{\text{vieja}}(X_t) + \alpha_t\, f_{\text{nueva}}(X_t) + \varepsilon_t,\qquad
+  \alpha_t = \frac{1}{1+\exp\{-15(t-0.6)\}}.
+  \end{equation}
+  \item Tres variantes de la función de \textcite{friedman1991} con diez covariables uniformes, donde el
+  concepto B permuta los roles de las variables como en \textcite{ikonomovska2011}: cambio abrupto en
+  $t=0.6$; cambio gradual entre $t=0.35$ y $0.75$ con data drift en cinco variables; y concepto
+  recurrente A, B, A, B por cuartos, con una firma del régimen en dos covariables.
+  \item Cuatro escenarios adicionales: data drift fuerte (la media de cuatro de ocho variables se
+  desplaza $2\sigma$) con $P(Y\mid X)$ fijo; 20 variables correlacionadas con data drift en media y
+  varianza, un cambio de signo abrupto en $t=0.7$ y un coeficiente que crece de forma incremental;
+  concept drift local, que solo afecta a la región $x_0>0.6$ a partir de $t=0.55$; y coeficientes que
+  rotan de forma continua.
+\end{itemize}
+
+La \cref{fig:galeria} muestra cómo se comporta cada tipo de muestra con dos indicadores simples. El
+panel superior de cada escenario mide cuánto se alejan las covariables de su nivel inicial, en
+desviaciones estándar del primer 30\,\%. El inferior mide el error de un modelo entrenado solo con ese
+30\,\% inicial, relativo a su error dentro de ese mismo tramo: si el pasado sigue sirviendo, la
+línea se queda cerca de 1.
+
+\begin{figure}[p]
+  \centering
+  \includegraphics[width=\textwidth]{figuras/galeria_escenarios.pdf}
+  \caption{Comportamiento de las muestras en ocho escenarios sintéticos}\label{fig:galeria}
+  \nota{Panel superior de cada escenario: máximo, entre covariables, del valor absoluto de la media
+  móvil (400 observaciones) de $X$ estandarizada con la media y la desviación del primer 30\,\%.
+  Panel inferior: RMSE móvil (400 observaciones) de un RF entrenado con las filas pares del primer
+  30\,\% (banda celeste), evaluado en filas que no vio y dividido por su RMSE fuera de muestra dentro
+  de ese tramo; la línea punteada marca 1. Bandas y líneas naranjas: periodos en que el generador
+  introduce el cambio de concepto. Semilla 0. \textit{Fuente:}
+  \texttt{experiments/synthetic\_scenarios.py}.}
+\end{figure}
+
+La figura permite leer cuatro comportamientos. Sin drift (a), ambas líneas son planas: el pasado
+sigue siendo válido y conviene usarlo entero. Con solo data drift (b, c), las covariables se desplazan
+y el error del modelo antiguo también sube, pero no porque la regla haya cambiado, sino porque el
+modelo debe predecir en zonas de $X$ que vio poco o nada. En ese caso, descartar datos antiguos no
+corrige el problema, porque los datos recientes obedecen la misma regla. Con concept drift (d, e, f,
+h), el error sube justo cuando cambia la regla y no vuelve a bajar, aunque $X$ no se mueva, como en
+(d), (e) y (h); la MMD, que solo mira $X$, no puede verlo. Con drift recurrente (g), el error sube y
+baja al ritmo en que el régimen B aparece y desaparece: es el único caso en que un modelo antiguo
+vuelve a ser útil, y por eso el único en que conservar bloques del pasado tiene una ventaja
+estructural.
+
+\subsection{Datos reales}
+
+Los cinco conjuntos reales son regresiones con drift documentado. Air Quality contiene la
+concentración de CO medida por un analizador de referencia y cinco sensores químicos con deriva
+conocida \parencite{devito2008}. Bike Sharing registra alquileres horarios de bicicletas en 2011 y 2012
+\parencite{fanaee2014}; se excluye la variable de año para que el crecimiento del sistema actúe como
+contexto oculto. Gas Sensor Drift reúne 128 rasgos de 16 sensores de gas medidos durante 36 meses
+\parencite{vergara2012}; el objetivo es el logaritmo de la concentración. Beijing PM2.5 contiene la
+concentración horaria de material particulado y variables meteorológicas entre 2010 y 2014
+\parencite{liang2015}. Electricity (Elec2) registra la demanda eléctrica de Nueva Gales del Sur cada 30
+minutos entre 1996 y 1998 \parencite{harries1999}. Beijing y Electricity se submuestrearon una de
+cada tres filas para que las matrices de kernel de la MMD quepan en memoria.
+
+\subsection{Diagnóstico de drift}
+
+Para no depender de las etiquetas asignadas a cada conjunto, se midió el drift con cuatro indicadores
+independientes de los modelos comparados (\cref{tab:datasets}). El AUC de data drift es el área bajo
+la curva ROC de un bosque que distingue el 30\,\% inicial del 30\,\% final de $X$ (0.5 indica ausencia
+de data drift). La ganancia de concepto (CG) es la reducción relativa del RMSE de un RF, con
+validación cruzada aleatoria, al añadir el tiempo como covariable; si conocer $t$ mejora la predicción
+dado $X$, entonces $P(Y\mid X)$ cambia con el tiempo. En series reales este indicador también recoge
+autocorrelación de corto plazo. El cociente de recencia (RR) divide el RMSE sobre el 20\,\% final de
+un RF entrenado con el primer 40\,\% entre el de uno entrenado con el tramo del 40 al 80\,\%; un valor
+mayor que 1 indica que los datos antiguos predicen peor el futuro.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Conjuntos de datos y diagnóstico de drift}\label{tab:datasets}
+  \small
+  \input{tablas/datasets.tex}
+  \nota{$n$: observaciones; $p$: covariables. AUC: área bajo la curva ROC al distinguir el 30\,\%
+  inicial del final de $X$. CG: ganancia relativa de RMSE al añadir el tiempo como covariable. RR:
+  cociente de recencia. En los sintéticos, diagnóstico con la semilla 0. \textit{Fuente:}
+  \texttt{experiments/results/diagnostics\_*.csv}.}
+\end{table}
+
+El diagnóstico confirma el diseño de los escenarios sintéticos: los que solo tienen concept drift
+muestran AUC cercano a 0.5 y CG positiva, y los que solo tienen data drift muestran AUC alto y CG
+nula. En los datos reales, el AUC es cercano a 1 en cuatro de cinco conjuntos, lo que indica data
+drift fuerte, mientras que la CG es alta en Bike Sharing y Electricity y casi nula en Air Quality y
+Gas Drift.
+
+\subsection{Datos de la validación externa}\label{sec:datos-externos}
+
+Demanda de matrícula universitaria. Matrícula de otoño por institución en Estados Unidos entre 2002 y
+2023, del sistema IPEDS \parencite{nces_ipeds}. Se usa el total de estudiantes (variable
+\texttt{EFTOTLT} desde 2008 y \texttt{EFRACE24} antes, cuya equivalencia se verificó contra 2008) en
+un panel balanceado de 3\,196 instituciones con al menos 100 estudiantes todos los años: 1\,620
+públicas, 1\,253 privadas sin fines de lucro y 323 privadas con fines de lucro. El objetivo es el
+crecimiento logarítmico de la matrícula a uno y dos años, y las covariables son el crecimiento de los
+tres años previos, el tamaño, el tipo y el nivel de la institución y el crecimiento medio nacional y
+del mismo tipo. La evaluación es de origen rodante anual entre 2012 y 2022 (21 cortes entre ambos
+horizontes) y la referencia es el pronóstico ingenuo de crecimiento nulo. Se comparan además la
+tendencia de tres años, ETS amortiguado por institución \parencite{gardner1985}, una regresión lineal
+global y LightGBM.
+
+Volatilidad financiera. Trece series diarias de Yahoo Finance y del Banco Central de Reserva del Perú
+(tipo de cambio interbancario, serie \texttt{PD04638PD}). El objetivo es el logaritmo de la
+volatilidad realizada anualizada de los cinco días siguientes (para el VIX, su nivel cinco días
+después), y las covariables son la volatilidad propia a uno, cinco y 22 días, el VIX y los retornos a
+cinco días del S\&P 500, el cobre y el dólar. Se evalúa con walk-forward de seis bloques y un embargo de
+cinco días, para que el objetivo del entrenamiento no se solape con el de la prueba. La referencia es
+el HAR \parencite{corsi2009}; HAR-X es el mismo modelo lineal con todas las covariables de los
+árboles. Nueve series se usaron en la exploración y cuatro (EUR/USD, oro, Nasdaq-100 y Russell 2000)
+se reservaron para confirmar la hipótesis que surgió de ella.
+
+Macroeconomía mensual. Veinticinco series mensuales de FRED, transformadas con los códigos de
+\textcite{mccracken2016}, más dos diferenciales de tasas, entre 1961 y 2026. Los objetivos son la
+inflación del índice de precios al consumidor, el crecimiento de la producción industrial y el cambio
+en la tasa de desempleo a uno, tres, seis y 12 meses. La referencia es un modelo autorregresivo (AR);
+se comparan el índice de difusión de \textcite{stockwatson2002} con tres factores y versiones de los
+modelos que añaden el índice mensual de incertidumbre de política económica (EPU) de
+\textcite{baker2016}. Los datos son las series revisadas actuales, no las disponibles en cada fecha.
+
+% =====================================================================================
+\section{Resultados}\label{sec:resultados}
+
+\subsection{Réplica del resultado inicial}\label{sec:res-replica}
+
+La primera versión del repositorio reportó, en el escenario hospitalario con data y concept drift y
+partición 4\,000/1\,000, un RMSE de 6.40 para el RF convencional, de 5.94 para el
+\texttt{DriftRegressor} en modo \texttt{mmd}, de 5.82 en modo \texttt{hybrid} y de 5.09 en modo
+\texttt{recent\_error}, con $K=5$ y $\beta=15$. Con hiperparámetros optimizados por Optuna, el RMSE
+pasaba de 6.39 a 4.69, una reducción del 26.6\,\%. La réplica con el código del repositorio reproduce
+las cuatro primeras cifras con cuatro decimales. En modo \texttt{recent\_error} el modelo asigna
+todo el peso al último bloque; en modo \texttt{mmd}, con $\beta=15$, los dos bloques más antiguos
+conservan el 28\,\% del peso.
+
+Esa comparación tiene dos límites: se hizo en el escenario más favorable para el modelo y no incluyó
+ninguna línea base con recencia. Las secciones siguientes amplían la evaluación en ambas direcciones.
+
+\subsection{DriftRegressor frente a las líneas base}\label{sec:res-dr}
+
+La \cref{tab:sint-walk} presenta los cocientes de RMSE por escenario en el protocolo walk-forward. El
+\texttt{DriftRegressor} en modo \texttt{recent\_error} mejora al RF en \hUnoGana{} de los \nConcept{}
+escenarios con concept drift, con un cociente medio de \hUnoGeo{} en ese subconjunto (H1, apoyada en
+parte). Sus mayores ganancias aparecen en el escenario hospitalario con concept drift
+(\xDRrHealthcareConceptWalk) y en el de drift local (\xDRrLocalDriftWalk); pierde en los escenarios
+con data drift fuerte y concept drift gradual o mixto.
+
+Cuando solo hay data drift, el modo \texttt{mmd} empeora: su cociente es de \hDosMin{} en el escenario
+hospitalario con data drift y de \hDosMax{} en el de data drift fuerte (H2, no apoyada). La causa es
+estructural: si $P(Y\mid X)$ no cambia, cada sub-bosque estima la misma función con la quinta parte
+de los datos, y la combinación de cinco estimadores con más varianza no compensa la pérdida de
+muestra. Además, con $\beta=15$ los pesos quedan cerca de la uniformidad, porque los valores de
+$\MMD^2$ entre bloques son del orden de 0.01 a 0.2.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Cociente de RMSE respecto al RF convencional, escenarios sintéticos, walk-forward}\label{tab:sint-walk}
+  \small
+  \input{tablas/sint_walk.tex}
+  \nota{Media geométrica de RMSE$_{\text{modelo}}$/RMSE$_{\text{RF}}$ sobre 3 semillas y 6 pasos.
+  Menor que 1 indica menor error que el RF. Subrayado: mejor modelo del escenario cuando mejora al RF.
+  RF-V: ventana del 20\,\% reciente; RF-E: pesos exponenciales; DR-M, DR-R, DR-H:
+  \texttt{DriftRegressor} en modos \texttt{mmd}, \texttt{recent\_error} e \texttt{hybrid}; ADF-E,
+  ADF-H: \texttt{AdaptiveDriftForest} en modos \texttt{error} e \texttt{hybrid}. \textit{Fuente:}
+  \texttt{experiments/results/benchmark\_synthetic*.csv}.}
+\end{table}
+
+La comparación con las líneas base de recencia es la que más cambia la lectura. El RF-V tiene menor
+error que el mejor modo del \texttt{DriftRegressor} en \hTresRFV{} de \hTresN{} escenarios, y el RF-E
+en \hTresRFE{} (H3, no apoyada). En el escenario hospitalario con ambos tipos de drift, el RF-V
+alcanza un cociente de \xRFVHealthcareBothWalk{}, frente a \xDRrHealthcareBothWalk{} del mejor modo
+del \texttt{DriftRegressor}. La excepción es el concept drift recurrente: ahí el modo
+\texttt{hybrid} obtiene \xDRhFriedmanRecurringWalk{} y el RF-V \xRFVFriedmanRecurringWalk{}, porque
+el \texttt{DriftRegressor} puede volver a dar peso a bloques antiguos cuyo régimen reaparece,
+mientras que la ventana reciente solo ve el último régimen.
+
+En los datos reales (\cref{tab:real-walk}), ningún modo del \texttt{DriftRegressor} mejora al RF de
+forma consistente. El modo \texttt{mmd} gana en Electricity (\xDRmElectricityWalk) y el modo
+\texttt{recent\_error} en Bike Sharing (\xDRrBikeSharingWalk), pero todos pierden en Gas Drift, donde
+en la partición 80/20 el cociente llega a estar entre \gasDRmin{} y \gasDRmax{}
+(\cref{tab:real-static} del \cref{app:tablas}).
+
+\subsection{Resultados con hiperparámetros optimizados}\label{sec:res-optuna}
+
+La \cref{tab:optuna} muestra que la optimización no cambia la conclusión. El \texttt{DriftRegressor}
+optimizado mejora al RF optimizado en \optDRganaRF{} de \optN{} conjuntos, y el RF-V optimizado le gana
+al \texttt{DriftRegressor} optimizado en \optRFVganaDR{} de \optN{}. En el escenario hospitalario con
+ambos tipos de drift, el \texttt{DriftRegressor} reduce el RMSE del RF de \optBothRF{} a \optBothDR{}
+(\optBothDRpct\,\%), pero el RF-V lo reduce a \optBothRFV{} (\optBothRFVpct\,\%). En Gas Drift, el
+\texttt{DriftRegressor} optimizado tiene un error \optGasDRpct\,\% mayor que el RF. Optuna eligió
+$\beta$ cercano a 57 en dos de los escenarios en modo \texttt{mmd}, lo que confirma que el valor por
+defecto $\beta=15$ es bajo para la escala de la MMD.
+
+\begin{table}[htbp]
+  \centering
+  \caption{RMSE en test con hiperparámetros optimizados (partición 80/20)}\label{tab:optuna}
+  \small
+  \input{tablas/optuna.tex}
+  \nota{Optuna con 20 ensayos por familia y \texttt{TimeSeriesSplit} de 4 particiones dentro del
+  80\,\% de entrenamiento. Subrayado: menor RMSE del conjunto. DR vs RF: variación porcentual del RMSE
+  del \texttt{DriftRegressor} respecto al RF. $K$: número de bloques. \textit{Fuente:}
+  \texttt{experiments/results/tuned\_static\_all.csv}.}
+\end{table}
+
+\subsection{AdaptiveDriftForest}\label{sec:res-adf}
+
+La \cref{tab:agregado} resume los cuatro cortes de la evaluación. En walk-forward sintético, el
+\texttt{AdaptiveDriftForest} en modo \texttt{error} tiene un cociente de \rADFeSintWalk{}, mejora al RF
+en \gADFeSintWalk{} de 11 escenarios y en el \wADFeSintWalk\,\% de los pasos, con Wilcoxon
+$p=\pADFeSintWalk$ y el mejor rango medio de los nueve modelos (\kADFeSintWalk). El RF-V queda en
+\rRFVSintWalk{} ($p=\pRFVSintWalk$). En el subconjunto con concept drift su cociente es
+\hCuatroConceptGeo{}, y en los tres escenarios sin concept drift el cociente máximo es
+\hCuatroSinMax{}, de modo que ya no pierde frente al RF cuando no hay nada que adaptar. Mejora al RF-V
+en \hCuatroVsRFV{} de 11 escenarios; la mayor desventaja frente a la ventana reciente aparece en el
+escenario de alta dimensión (\xADFeHighdimMixedWalk{} frente a \xRFVHighdimMixedWalk).
+
+La \cref{fig:resultados} presenta los mismos cocientes por conjunto de datos para los tres enfoques
+principales. En los escenarios sintéticos, los diamantes del \texttt{AdaptiveDriftForest} quedan a
+la izquierda de la línea de referencia en casi todas las filas y cerca de los puntos de la ventana
+reciente, mientras que los cuadrados del \texttt{DriftRegressor} se agrupan cerca o a la derecha de
+ella. En los datos reales ningún enfoque domina: el \texttt{AdaptiveDriftForest} evita las pérdidas
+grandes de los otros dos (Beijing para la ventana reciente, Gas Drift para el
+\texttt{DriftRegressor}), pero solo gana con claridad en Bike Sharing.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\textwidth]{figuras/resultados_por_dataset.pdf}
+  \caption{Error relativo al RF convencional por conjunto de datos (walk-forward)}\label{fig:resultados}
+  \nota{Cada marcador es la media geométrica de RMSE$_{\text{modelo}}$/RMSE$_{\text{RF}}$ sobre semillas
+  y pasos. A la izquierda de la línea punteada, el modelo tiene menor error que el RF. Para el
+  \texttt{DriftRegressor} se muestra, en cada conjunto, su mejor modo, lo que lo favorece. Conjuntos
+  ordenados por el cociente del \texttt{AdaptiveDriftForest}. \textit{Fuente:}
+  \texttt{experiments/results/benchmark\_*.csv}.}
+\end{figure}
+
+\begin{table}[htbp]
+  \centering
+  \caption{Resumen agregado por tipo de datos y protocolo}\label{tab:agregado}
+  \small
+  \input{tablas/agregado.tex}
+  \nota{Ratio RMSE: media geométrica sobre conjuntos del cociente respecto al RF. Datasets $<1$:
+  conjuntos donde el modelo mejora al RF. \% pasos $<1$: porcentaje de pares (semilla, paso) en que
+  mejora al RF. Rank medio: posición media por RMSE entre los nueve modelos (1 es el mejor). $p$:
+  prueba de Wilcoxon de rangos con signo sobre el log-cociente medio por conjunto. DR-R+: variante
+  experimental de DR-R que reentrena el último bloque con la cola de validación. Modelos ordenados por
+  rango medio. \textit{Fuente:} \texttt{experiments/results/benchmark\_*.csv}.}
+\end{table}
+
+En los datos reales la ventaja es menor. En walk-forward, el modo \texttt{error} obtiene
+\rADFeRealWalk{} y es el único modelo con mejor rango medio que el RF (\kADFeRealWalk{} frente a
+\kRFRealWalk); en la partición 80/20 obtiene \rADFeRealStatic{}. Ninguna de estas diferencias es
+estadísticamente distinguible, como era previsible con cinco conjuntos. En Gas Drift, donde el
+\texttt{DriftRegressor} perdía con claridad, el \texttt{AdaptiveDriftForest} iguala al RF
+(\xADFeGasDriftWalk), porque en todos los pasos concentra la mayor parte del peso en las ventanas
+largas, del 60 o del 100\,\% del histórico. En Electricity, en cambio, el
+\texttt{DriftRegressor} en modo \texttt{mmd} sigue siendo mejor (\xDRmElectricityWalk{} frente a
+\xADFeElectricityWalk), y en el escenario recurrente también lo es el modo \texttt{hybrid} original
+(\xDRhFriedmanRecurringWalk{} frente a \xADFeFriedmanRecurringWalk).
+
+Los pesos del \texttt{AdaptiveDriftForest} también sirven para entender qué detecta
+(\cref{fig:pesos}). En el escenario con concept drift alrededor de $t=0.6$, durante los dos primeros
+pasos, previos al cambio, reparte el peso entre ventanas medias y el histórico completo; desde el
+paso que empieza en el 60\,\% lo concentra por completo en las ventanas cortas. En el escenario sin
+drift nunca se concentra en ventanas cortas y combina ventanas largas con bloques antiguos, que en
+ese caso son igual de válidos. En Gas Drift alterna entre la ventana del 60\,\% y el histórico
+completo, lo que explica que iguale al RF.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\textwidth]{figuras/pesos_adf.pdf}
+  \caption{Pesos del \texttt{AdaptiveDriftForest} en cada paso walk-forward}\label{fig:pesos}
+  \nota{Peso total asignado a cada grupo de candidatos en los seis reentrenamientos (modo
+  \texttt{error}, semilla 0). El eje horizontal indica el origen de cada paso como porcentaje de la
+  muestra. \textit{Fuente:} \texttt{experiments/results/benchmark\_*\_adf.csv}.}
+\end{figure}
+
+La variante DR-R+, que solo añade el reentrenamiento del último bloque con la cola reciente, pasa de
+\rDRrSintWalk{} a \rDRrefitSintWalk{} en walk-forward sintético. Esto aísla una parte de la mejora:
+no usar los datos más recientes para entrenar era el defecto más costoso del diseño original.
+
+\subsection{Síntesis de las hipótesis}
+
+La \cref{tab:veredictos} contrasta cada hipótesis con el criterio fijado en la
+\cref{sec:hipotesis}.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Contraste de hipótesis (walk-forward, escenarios sintéticos)}\label{tab:veredictos}
+  \small
+  \begin{tabularx}{\textwidth}{l X X l}
+    \toprule
+    Hip. & Lo que se esperaba & Lo que se encontró & Veredicto \\
+    \midrule
+    H1 & DR-R con menor RMSE que RF bajo concept drift &
+      Cociente \hUnoGeo{}; gana en \hUnoGana{} de \nConcept{} escenarios & Apoyada en parte \\
+    H2 & DR-M con menor RMSE que RF bajo solo data drift &
+      Cocientes de \hDosMin{} y \hDosMax{}; pierde en ambos & No apoyada \\
+    H3 & Mejor modo de DR con menor RMSE que RF-V y RF-E &
+      RF-V gana en \hTresRFV{} de \hTresN{} y RF-E en \hTresRFE{} de \hTresN{} & No apoyada \\
+    H4 & ADF con menor RMSE que RF y líneas base, sin perder sin drift &
+      Cociente \rADFeSintWalk{} ($p=\pADFeSintWalk$); máximo \hCuatroSinMax{} sin concept drift; gana a
+      RF-V en \hCuatroVsRFV{} de 11 & Apoyada en sintéticos \\
+    \bottomrule
+  \end{tabularx}
+  \nota{H4 se formuló después de observar H1 a H3 y se evaluó en los mismos conjuntos (\cref{sec:limitaciones}).}
+\end{table}
+
+
+\subsection{Comparación con métodos de la literatura}\label{sec:res-lit}
+
+La \cref{tab:literatura} y la \cref{fig:literatura} comparan el \texttt{AdaptiveDriftForest} con dos
+métodos de la literatura de flujos de datos, con LightGBM y con RF+t. En los escenarios sintéticos, el
+\texttt{AdaptiveDriftForest} tiene menor RMSE que ARF en \VadfVsARFGana{} de 11 escenarios, con un
+cociente medio respecto a ARF de \VadfVsARFGeo{} (H16 apoyada), y menor que LightGBM en \VadfVsLGBMGana{}
+de 11, con un cociente de \VadfVsLGBMGeo{} (H17 apoyada). ARF y HAT tienen sus mejores resultados con
+concept drift persistente, como el escenario incremental, donde HAT obtiene el menor cociente de la tabla
+(\VlitHatIncr), y empeoran cuando no hay concept drift o solo cambian las covariables, con cocientes de
+hasta \VlitArfCov{} en el escenario de data drift fuerte. Una explicación coherente con este patrón, que
+aquí no se prueba, es que sus detectores reaccionan a cambios de $P(X)$ reemplazando árboles que seguían
+siendo válidos. LightGBM no se adapta al concept drift, porque aprende de todo el histórico por igual, y
+su desempeño frente al RF varía mucho entre escenarios: es el mejor en el de data drift fuerte
+(\VlitLgbmCov) y el peor en el de data drift hospitalario (\VlitLgbmHospData).
+
+En los datos reales el orden cambia. LightGBM tiene el menor cociente medio (\VlitRealLGBM) y mejora al
+RF en \VlitGanaRealLGBM{} de 5 conjuntos; el \texttt{AdaptiveDriftForest} queda en \VlitRealADFE{} y
+supera a ARF en los \VadfVsARFGanaReal{} conjuntos, pero a LightGBM solo en \VadfVsLGBMGanaReal. ARF y
+HAT, diseñados para flujos de datos, son peores que el RF en todos los conjuntos reales, con cocientes
+medios de \VlitRealARF{} y \VlitRealHAT. En la matrícula, en cambio, ARF iguala o mejora ligeramente al
+\texttt{AdaptiveDriftForest}: tiene menor RMSE en \VmatARFVsAdf{} de \VmatN{} cortes y el
+\texttt{AdaptiveDriftForest} en \VmatAdfVsARF{} ($p\VmatAdfVsARFP$; H18 no apoyada), aunque en media
+geométrica la diferencia es menor a un punto porcentual (\cref{tab:matricula}). Por último, RF+t, el
+bosque con el tiempo como covariable, tiene el menor cociente medio en los sintéticos (\VlitSinteticoRFt)
+pero pierde frente al RF en los reales (\VlitRealRFt).
+
+\begin{table}[htbp]
+  \centering
+  \caption{Comparación con métodos de la literatura: cociente de RMSE respecto al RF convencional (walk-forward)}\label{tab:literatura}
+  \small
+  \input{tablas/v2_literatura.tex}
+  \nota{Media geométrica de RMSE$_{\text{modelo}}$/RMSE$_{\text{RF}}$ sobre semillas y pasos, como en la
+  \cref{tab:sint-walk}. ARF y HAT: Adaptive Random Forest y Hoeffding Adaptive Tree para regresión
+  (River), que aprenden fila a fila hasta cada origen y predicen sin aprender del bloque de prueba. LGBM:
+  LightGBM. RF+t: RF con el tiempo como covariable. Subrayado: menor valor de la fila. \textit{Fuente:}
+  \texttt{experiments/results/lit\_benchmark.csv} y \texttt{benchmark\_*.csv}.}
+\end{table}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.85\textwidth]{figuras/v2_literatura.pdf}
+  \caption{Error relativo al RF convencional de los métodos de la literatura y del \texttt{AdaptiveDriftForest}}\label{fig:literatura}
+  \nota{Walk-forward; escala logarítmica. A la izquierda de la línea punteada, el modelo tiene menor
+  error que el RF. La línea horizontal separa los escenarios sintéticos de los conjuntos reales.
+  \textit{Fuente:} \texttt{experiments/results/lit\_benchmark.csv}.}
+\end{figure}
+
+\subsection{Validación externa}\label{sec:res-externa}
+
+\paragraph{Demanda de matrícula universitaria.} La \cref{tab:matricula} resume los errores relativos al
+pronóstico ingenuo. El \texttt{AdaptiveDriftForest} tiene menor RMSE que el RF en \VmatAdfVsRF{} de
+\VmatN{} cortes ($p\VmatAdfVsRFP$; H9 apoyada) y que ETS en \VmatAdfVsETS{} ($p\VmatAdfVsETSP$; H11
+apoyada), pero no supera a LightGBM: lo mejora solo en \VmatAdfVsLGBM{} de \VmatN{} cortes
+($p\VmatAdfVsLGBMP$; H10 no apoyada). En media geométrica, el \texttt{AdaptiveDriftForest}, LightGBM y ARF
+quedan a menos de un punto porcentual entre sí. Su ventaja sobre el RF no es mayor en las
+instituciones con fines de lucro (\VmatSector{} de \VmatN{} cortes, $p\VmatSectorP$; H12 no apoyada).
+
+Dos rasgos de la tabla importan más que el orden de los modelos. Primero, las mejoras frente al
+pronóstico ingenuo son pequeñas, de 1 a 3\,\%: la matrícula de una institución es poco predecible más
+allá de su nivel actual. Segundo, los modelos que extrapolan la tendencia reciente son los peores. ETS
+es peor que el ingenuo en los \VmatEtsPeorIng{} cortes y, al pronosticar 2013, poco después de que la
+matrícula de las instituciones públicas pasara de crecer a caer, su error absoluto medio es
+\VmatEtsDosmilTrece{} veces el del ingenuo (\cref{fig:matricula}). Al pronosticar 2020, el año de la
+pandemia, el \texttt{AdaptiveDriftForest} reduce el error del ingenuo a \VmatAdfCovid{} veces, mientras
+que LightGBM queda en \VmatLgbmCovid.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Demanda de matrícula universitaria: error relativo al pronóstico ingenuo}\label{tab:matricula}
+  \small
+  \input{tablas/v2_matricula.tex}
+  \nota{Media geométrica, sobre los cortes de origen rodante (11 para $h=1$ y 10 para $h=2$), del
+  cociente entre el error del modelo y el del pronóstico de crecimiento nulo; menor que 1 es mejor.
+  Subrayado: menor valor de la columna. Modelos aleatorios promediados sobre dos semillas.
+  \textit{Fuente:} \texttt{experiments/results/matricula\_results.csv},
+  \texttt{tiempo\_matricula\_results.csv} y \texttt{lit\_matricula.csv}.}
+\end{table}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.9\textwidth]{figuras/v2_17_matricula_en_el_tiempo.png}
+  \caption{Error de la matrícula a un año, por año pronosticado}\label{fig:matricula}
+  \nota{Cociente entre el error absoluto medio de cada modelo y el del pronóstico ingenuo; la línea
+  punteada marca 1. La banda señala los años afectados por la pandemia. \textit{Fuente:}
+  \texttt{experiments/results/matricula\_results.csv}.}
+\end{figure}
+
+\paragraph{Volatilidad financiera.} En las nueve series exploradas, el HAR-X, lineal y con las mismas
+covariables que los árboles, tiene menor RMSE que el \texttt{AdaptiveDriftForest} en \VfinHarxVsAdf{} de
+\VfinN{} bloques y que el RF en \VfinHarxVsRF{} (\cref{tab:finanzas}). La ventana reciente pierde frente
+al RF en \VfinRFVvsRFpierde{} de \VfinN{} bloques ($p\VfinRFVvsRFP$): en volatilidad, recortar la memoria
+empeora el pronóstico. El \texttt{AdaptiveDriftForest} evita esa pérdida porque aprende a dar peso a las
+ventanas largas, pero solo empata con el RF (lo mejora en \VfinAdfVsRF{} de \VfinN{} bloques).
+
+De la exploración surgió una hipótesis nueva, que se registró antes de probarla: combinar el HAR-X, que
+capta el nivel, con un bosque que corrige sus residuos. En las cuatro series de confirmación (\cref{fig:finanzas}), esa
+combinación con el \texttt{AdaptiveDriftForest} no mejora al HAR-X (\VfinHuno{} de \VfinConfN{} bloques,
+$p\VfinHunoP$; H5 no apoyada), y la ventaja del \texttt{AdaptiveDriftForest} sobre el RF como corrector
+de residuos solo es sugerente (\VfinHdos{} de \VfinConfN, $p\VfinHdosP$; H6 no apoyada). Lo que sí se
+confirma en las series nuevas es que las covariables de mercado mejoran al HAR: el HAR-X le gana en
+\VfinHarxVsHarConf{} de \VfinConfN{} bloques ($p\VfinHarxVsHarConfP$).
+
+\begin{table}[htbp]
+  \centering
+  \caption{Volatilidad financiera: cociente de RMSE respecto al HAR (walk-forward)}\label{tab:finanzas}
+  \small
+  \input{tablas/v2_finanzas.tex}
+  \nota{Media geométrica sobre los seis bloques de walk-forward; los modelos aleatorios se promedian
+  sobre tres semillas. HAR-X: regresión lineal con todas las covariables de los árboles. HAR-X+ADF: HAR-X
+  más un \texttt{AdaptiveDriftForest} ajustado sobre sus residuos. Subrayado: menor valor de la fila.
+  \textit{Fuente:} \texttt{experiments/results/finance\_*.csv}.}
+\end{table}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\textwidth]{figuras/v2_08_finanzas_confirmacion.png}
+  \caption{Volatilidad en las cuatro series de confirmación}\label{fig:finanzas}
+  \nota{Cociente de RMSE respecto al HAR, en walk-forward (izquierda) y en la partición 80/20 (derecha).
+  \textit{Fuente:} \texttt{experiments/results/finance\_holdout\_results.csv}.}
+\end{figure}
+
+\paragraph{Macroeconomía mensual e incertidumbre de política.} En las 12 tareas macroeconómicas ningún
+modelo supera de forma consistente al AR (\cref{tab:macro}). El \texttt{AdaptiveDriftForest} tiene
+menor RMSE que el RF solo en \VmacAdfVsRF{} de \VmacN{} bloques ($p\VmacAdfVsRFP$), en la dirección
+contraria a la anticipada (H7 no apoyada): con 300 a 700 meses de entrenamiento, la cola de validación es
+demasiado corta para elegir bien la memoria. Añadir el EPU al índice de difusión no mejora el pronóstico
+de la producción ni del desempleo a seis y 12 meses (\VmacEpuDI{} de \VmacEpuN{} bloques,
+$p\VmacEpuDIP$; H8 no apoyada). La ventana reciente vuelve a perder frente al RF (\VmacRFVpierde{} de
+\VmacN{} bloques, $p\VmacRFVP$).
+
+El único patrón favorable a los árboles, no anticipado, aparece en el desempleo: el RF tiene cocientes
+entre \VmacRFdesMin{} y \VmacRFdesMax{} respecto al AR, coherentes con una dinámica asimétrica que sube
+rápido en las recesiones y baja despacio. Sin el último bloque, que contiene la pandemia, el cociente
+medio del RF en desempleo es \VmacRFdesSinCovid, de modo que parte de esa ventaja proviene de ese
+periodo (\cref{fig:macro}).
+
+\begin{table}[htbp]
+  \centering
+  \caption{Macroeconomía mensual: cociente de RMSE respecto al modelo AR (walk-forward)}\label{tab:macro}
+  \small
+  \input{tablas/v2_macro.tex}
+  \nota{Media geométrica sobre seis bloques de prueba entre 1987 y 2025; los modelos aleatorios se
+  promedian sobre tres semillas. DI: índice de difusión con tres factores. DI+EPU: DI con el índice de
+  incertidumbre de política. Subrayado: menor valor de la fila. \textit{Fuente:}
+  \texttt{experiments/results/macro\_results.csv}.}
+\end{table}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.9\textwidth]{figuras/v2_13_macro_vs_ar.png}
+  \caption{Error relativo al AR por objetivo y horizonte}\label{fig:macro}
+  \nota{Walk-forward, escala logarítmica. \textit{Fuente:} \texttt{experiments/results/macro\_results.csv}.}
+\end{figure}
+
+\subsection{Divisiones sensibles al tiempo: versión simplificada}\label{sec:res-tiempo}
+
+La \cref{tab:tiempo} evalúa la versión simplificada de las divisiones sensibles al drift. Part3+RF no
+mejora al RF en la mayoría de los bloques del escenario de drift local (\VtiempoHnueve{} de
+\VtiempoHnueveN, $p\VtiempoHnueveP$; H13 no apoyada), aunque su cociente medio es \VtiempoLocalPart: los
+bloques anteriores al cambio no pueden mejorar y la prueba de signo los cuenta igual que las ganancias
+grandes. En los controles sin concept drift, RF+t no empeora (cociente máximo \VtiempoCtrlMaxRFt) y
+Part3+RF sí (\VtiempoCtrlMaxPart; H14 apoyada en parte). En la matrícula ninguna de las dos variantes
+mejora al RF: RF+t gana en \VmatRFtVsRF{} y Part3+RF en \VmatPartVsRF{} de \VmatN{} cortes (H15 no
+apoyada).
+
+El resultado más útil es otro. El árbol de tres niveles dividió por el tiempo en promedio
+\VtiempoCortesT{} veces de sus \VtiempoCortes{} divisiones, de modo que restringir la adaptación a los
+primeros niveles es lo que falla. RF+t, que deja competir al tiempo en todos los niveles, obtiene el
+menor error en el escenario de drift local (\VtiempoLocalRFt{} frente a \VtiempoLocalAdf{} del
+\texttt{AdaptiveDriftForest}) con un solo bosque.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Divisiones sensibles al tiempo: cociente de RMSE respecto al RF convencional (walk-forward)}\label{tab:tiempo}
+  \small
+  \input{tablas/v2_tiempo.tex}
+  \nota{Media geométrica sobre semillas y pasos. RF+t: RF con el tiempo como covariable. Part3+RF:
+  árbol de tres niveles sobre $[X,t]$ y un RF por región. Subrayado: menor valor de la fila.
+  \textit{Fuente:} \texttt{experiments/results/tiempo\_results.csv}.}
+\end{table}
+
+\subsection{Costo de cómputo}\label{sec:res-costos}
+
+La \cref{tab:costos} mide el costo de cada modelo en el corte más grande de la matrícula (\VcostoFilas{}
+filas de entrenamiento y 13 covariables, en una máquina de 14 núcleos). El \texttt{AdaptiveDriftForest}
+tarda unas \VcostoAdfVsLgbmFit{} veces más que LightGBM en ajustarse y usa unas \VcostoAdfVsLgbmRam{}
+veces más memoria adicional (\VcostoAdfRam{} GB), porque entrena alrededor de diez bosques de árboles sin
+límite de profundidad, dos veces cada uno. El costo puede reducirse limitando la profundidad o el número
+de árboles, pero con la configuración evaluada LightGBM ofrece una precisión comparable en la matrícula
+por una fracción del costo.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Costo de cómputo en el corte más grande de la matrícula}\label{tab:costos}
+  \small
+  \input{tablas/v2_costos.tex}
+  \nota{Ajuste: tiempo de reloj. CPU: tiempo de procesador sumado sobre los núcleos. 1 fila: latencia de
+  predicción de una observación. RAM extra: aumento del pico de memoria del proceso durante el ajuste y la
+  predicción. Modelo: tamaño serializado. Cada modelo corre en un proceso aparte. \textit{Fuente:}
+  \texttt{experiments/results/costos\_operativos.csv}.}
+\end{table}
+
+\subsection{Síntesis de la validación externa}
+
+\begin{table}[htbp]
+  \centering
+  \caption{Contraste de las hipótesis registradas antes de cada experimento}\label{tab:veredictos-v2}
+  \small
+  \begin{tabularx}{\textwidth}{l l X l l}
+    \toprule
+    Hip. & Dominio & Lo que se esperaba & Resultado & Veredicto \\
+    \midrule
+    H5 & Finanzas & HAR-X+ADF residual mejor que HAR-X & \VfinHuno{}/\VfinConfN, $p\VfinHunoP$ & No apoyada \\
+    H6 & Finanzas & ADF residual mejor que RF residual & \VfinHdos{}/\VfinConfN, $p\VfinHdosP$ & No apoyada \\
+    H7 & Macro & ADF mejor que RF & \VmacAdfVsRF{}/\VmacN, $p\VmacAdfVsRFP$ & No apoyada \\
+    H8 & Macro & DI+EPU mejor que DI (producción y desempleo, 6 y 12 meses) & \VmacEpuDI{}/\VmacEpuN, $p\VmacEpuDIP$ & No apoyada \\
+    H9 & Matrícula & ADF mejor que RF & \VmatAdfVsRF{}/\VmatN, $p\VmatAdfVsRFP$ & Apoyada \\
+    H10 & Matrícula & ADF mejor que LightGBM & \VmatAdfVsLGBM{}/\VmatN, $p\VmatAdfVsLGBMP$ & No apoyada \\
+    H11 & Matrícula & ADF mejor que ETS & \VmatAdfVsETS{}/\VmatN, $p\VmatAdfVsETSP$ & Apoyada \\
+    H12 & Matrícula & Ventaja ADF/RF mayor con fines de lucro & \VmatSector{}/\VmatN, $p\VmatSectorP$ & No apoyada \\
+    H13 & Tiempo & Part3+RF mejor que RF con drift local & \VtiempoHnueve{}/\VtiempoHnueveN, $p\VtiempoHnueveP$ & No apoyada \\
+    H14 & Tiempo & RF+t y Part3+RF sin pérdida mayor al 2\,\% en controles & máx.\ \VtiempoCtrlMaxRFt{} y \VtiempoCtrlMaxPart & En parte \\
+    H15 & Tiempo & RF+t o Part3+RF mejor que RF en matrícula & \VmatRFtVsRF{} y \VmatPartVsRF{} de \VmatN & No apoyada \\
+    H16 & Literatura & ADF mejor que ARF (sintéticos) & cociente \VadfVsARFGeo; \VadfVsARFGana{}/11 & Apoyada \\
+    H17 & Literatura & ADF mejor que LightGBM (sintéticos) & cociente \VadfVsLGBMGeo; \VadfVsLGBMGana{}/11 & Apoyada \\
+    H18 & Literatura & ADF mejor que ARF en matrícula & \VmatAdfVsARF{}/\VmatN, $p\VmatAdfVsARFP$ & No apoyada \\
+    \bottomrule
+  \end{tabularx}
+  \nota{Resultado: número de bloques o cortes en que se cumple la desigualdad, sobre el total, y valor $p$
+  de la prueba de signo bilateral. H14, H16 y H17 usan los criterios indicados en el texto. Numeración de
+  la bitácora: H5 y H6 corresponden a §9 (H1 y H2); H7 y H8 a §12 (H3 y H4); H9 a H12 a §13 (H5 a H8);
+  H13 a H15 a §15 (H9 a H11); H16 a H18 a §16 (H12 a H14).}
+\end{table}
+
+% =====================================================================================
+\section{Discusión}\label{sec:discusion}
+
+Los resultados indican que, en regresión por lotes, la decisión más importante ante el drift es qué
+tan atrás mirar, y que esa decisión puede tomarse con un criterio tan simple como el error sobre el
+tramo más reciente. El \texttt{DriftRegressor} acertaba en la dirección, porque concentraba el peso
+en los bloques recientes cuando había concept drift, pero lo hacía con modelos entrenados con una
+quinta parte de los datos y sin usar el tramo más reciente. El RF-V, que solo resuelve el primer
+problema, ya lo superaba. El \texttt{AdaptiveDriftForest} funciona porque deja que el error reciente
+elija entre ventanas de distinto largo, de modo que se comporta como un RF con todo el histórico
+cuando no hay concept drift y como una ventana corta cuando lo hay.
+
+La validación externa delimita cuándo sirve esta idea. El \texttt{AdaptiveDriftForest} superó al RF
+en la matrícula universitaria, un panel con decenas de miles de filas y un cambio de tendencia
+persistente, y no lo superó en volatilidad financiera ni en macroeconomía mensual, donde las series
+vuelven a su media y los regímenes se repiten. En esos dos dominios la ventana reciente perdió frente al
+histórico completo en la mayoría de los bloques, en línea con \textcite{pesaran2007}: cuando los regímenes
+reaparecen, el pasado sigue siendo informativo. Además, un modelo lineal con las mismas covariables
+superó a todos los árboles, porque los árboles no extrapolan a niveles de volatilidad o de inflación que no
+observaron. De estos resultados se desprende una regla práctica, que es una hipótesis para trabajos
+futuros y no una conclusión probada: un ensamble que elige su memoria conviene cuando el cambio es
+persistente, hay muchas observaciones y la relación es no lineal; cuando las variables oscilan alrededor
+de una media, conviene el histórico completo y un modelo lineal de referencia.
+
+La MMD aportó menos de lo esperado. Como solo mide cambios en $P(X)$, no distingue entre un cambio de
+covariables que el modelo puede absorber y un cambio de concepto que lo invalida, y en los escenarios
+de concept drift puro el diagnóstico la muestra casi nula. Su aporte aparece en dos casos: el drift
+recurrente, donde el régimen deja una firma en $X$ que permite reconocer bloques antiguos útiles, y
+Electricity, donde adaptar los pesos al lote de test ayuda. Ambos casos sugieren que la MMD es más
+útil como criterio de selección entre modelos de regímenes ya vistos que como detector general de
+drift.
+
+Este trabajo no afirma que el \texttt{AdaptiveDriftForest} sea superior en general a los métodos de la
+literatura: supera a ARF, HAT y LightGBM en los escenarios sintéticos, que se parecen a aquellos para los
+que fue diseñado, pero LightGBM tiene menor error medio en los datos reales del banco y ARF lo iguala en
+la matrícula. Su ventaja en datos reales tampoco puede generalizarse a partir de cinco conjuntos y tres
+dominios de validación. Tampoco afirma que la ponderación por bloques carezca de
+valor: el drift recurrente es un caso en el que tiene una ventaja estructural que las ventanas
+recientes no pueden replicar.
+
+\subsection{Limitaciones}\label{sec:limitaciones}
+
+Primero, el \texttt{AdaptiveDriftForest} se diseñó después de analizar los resultados del
+\texttt{DriftRegressor} en estos mismos conjuntos, de modo que su evaluación no es independiente de
+su diseño. Aunque sus valores por defecto no se ajustaron a ningún conjunto, la elección de las
+ventanas candidatas y de la cola de validación puede reflejar lo que funcionó aquí; la validación
+externa (\cref{sec:res-externa}) atiende en parte esta limitación con hipótesis registradas en tres
+dominios nuevos, pero los escenarios sintéticos y los cinco conjuntos reales originales siguen sin ser
+una evaluación independiente.
+
+Segundo, cinco conjuntos reales no bastan para detectar diferencias moderadas con la prueba de
+Wilcoxon, y los datos reales se evaluaron con una sola semilla.
+
+Tercero, la búsqueda de hiperparámetros usó 20 ensayos por familia y no incluyó al
+\texttt{AdaptiveDriftForest}; una búsqueda más amplia podría cambiar la distancia entre modelos.
+
+Cuarto, la ganancia de concepto en series reales también recoge autocorrelación de corto plazo, por
+lo que sobreestima el concept drift en datos con alta frecuencia temporal.
+
+Quinto, el \texttt{AdaptiveDriftForest} entrena cerca del doble de bosques que el
+\texttt{DriftRegressor}; en Gas Drift, con 134 covariables, cada ajuste tarda alrededor de 90
+segundos, y en el corte más grande de la matrícula usa \VcostoAdfRam{} GB de memoria adicional
+(\cref{sec:res-costos}).
+
+Sexto, la validación externa tiene límites propios: el panel de matrícula excluye a las instituciones que
+cerraron (sesgo de supervivencia) y toma el tipo de institución del directorio de 2023; los datos
+macroeconómicos son versiones revisadas y no las disponibles en cada fecha; y las pruebas de signo no
+corrigen por comparaciones múltiples ni por la correlación entre bloques.
+
+Séptimo, ARF, HAT y LightGBM se evaluaron con su configuración por defecto, igual que el
+\texttt{AdaptiveDriftForest}; una optimización de todos los modelos podría cambiar las distancias.
+
+% =====================================================================================
+\section{Conclusiones}\label{sec:conclusiones}
+
+Bajo concept drift, el \texttt{DriftRegressor} mejora al bosque aleatorio convencional en la mayoría
+de los escenarios sintéticos, aunque no en todos (P1).
+
+Cuando solo cambia la distribución de las covariables, el \texttt{DriftRegressor} es peor que el
+bosque convencional, porque divide la muestra sin corregir ningún sesgo (P2).
+
+La ventaja del \texttt{DriftRegressor} se explica sobre todo por la recencia: un bosque entrenado con
+el 20\,\% más reciente del histórico lo supera en la mayoría de los escenarios. La ponderación por
+bloques solo aporta algo propio en el drift recurrente (P3).
+
+El \texttt{AdaptiveDriftForest}, al incluir ventanas recientes anidadas entre sus candidatos y
+reentrenar con los datos más nuevos, es el modelo con mejor rango medio en los cuatro cortes evaluados
+y no pierde frente al bosque convencional cuando no hay drift. Su ventaja es clara en los datos
+sintéticos y modesta, sin significancia estadística, en los reales (P4).
+
+Frente a métodos de la literatura (P5), el \texttt{AdaptiveDriftForest} supera a Adaptive Random Forest,
+Hoeffding Adaptive Tree y LightGBM en los escenarios sintéticos, pero en los datos reales LightGBM tiene
+menor error medio, y en la demanda de matrícula ARF lo iguala.
+
+En dominios no usados durante su diseño, el resultado depende del tipo de cambio (P6). En la demanda de
+matrícula universitaria, el \texttt{AdaptiveDriftForest} supera al bosque convencional y a ETS, aunque no
+a LightGBM. En volatilidad financiera y en macroeconomía mensual no supera al bosque convencional ni a los
+modelos lineales de referencia, y recortar la memoria empeora el pronóstico.
+
+% =====================================================================================
+\section{Recomendaciones}\label{sec:recomendaciones}
+
+\subsection{Para quien modela datos con drift}
+
+Diagnosticar antes de elegir el modelo. Los tres indicadores de la \cref{tab:datasets} (AUC de data
+drift, ganancia de concepto y cociente de recencia) se calculan en minutos y separan los casos de la
+\cref{fig:galeria}. Un AUC alto con ganancia de concepto nula, como en los escenarios de solo data
+drift y en Gas Drift, sugiere conservar el histórico completo; una ganancia de concepto alta junto con
+un cociente de recencia alto sugiere probar primero la recencia. Los indicadores orientan, pero no
+reemplazan la evaluación walk-forward: en el escenario incremental la ganancia de concepto es baja
+(0.03) y, aun así, la ventana reciente reduce el error en cerca de 30\,\%.
+
+Evaluar siempre con validación temporal. La validación cruzada aleatoria mezcla el futuro con el
+pasado y oculta el drift; el protocolo walk-forward reproduce la forma en que el modelo se usará:
+reentrenarlo cada cierto tiempo y predecir el tramo siguiente.
+
+Incluir líneas base de recencia. Un RF con el 20\,\% más reciente y un RF con pesos exponenciales
+cuestan lo mismo que el RF convencional y, en este trabajo, superaron al método adaptativo original.
+Un método que no les gana no justifica su complejidad.
+
+Comparar contra el modelo de referencia del dominio. En volatilidad (HAR), en macroeconomía (AR e
+índices de difusión) y en demanda (pronóstico ingenuo y ETS) existen modelos simples que un método de
+árboles debe superar antes de recomendarse; en este trabajo, el HAR-X superó a todos los árboles en
+volatilidad.
+
+Reentrenar con los datos más recientes. Reservar el tramo final solo para validar y no usarlo después
+para entrenar fue el defecto más costoso del diseño original; los datos más nuevos son los más
+informativos cuando hay concept drift.
+
+Vigilar los pesos, no solo el error. En el \texttt{AdaptiveDriftForest}, un desplazamiento del peso
+hacia las ventanas cortas (\cref{fig:pesos}) indica que el pasado dejó de servir. Esa señal puede
+usarse como alerta de cambio en un sistema en producción.
+
+\subsection{Para el desarrollo del modelo en el CCDE}
+
+Usar el \texttt{AdaptiveDriftForest} cuando el diagnóstico sugiere un cambio persistente y hay muchas
+observaciones, y compararlo siempre contra LightGBM y contra el modelo lineal de referencia del dominio.
+Reducir su costo (profundidad máxima, menos árboles o LightGBM como modelo base de cada ventana) antes de
+usarlo en producción. Conservar el \texttt{DriftRegressor} solo como referencia, hasta que su modo \texttt{mmd} admita predicciones de una fila y deje de
+depender del lote. Actualizar la documentación del repositorio para que toda cifra de mejora se
+reporte junto a las líneas base de recencia y en ambos protocolos. Mantener el banco de pruebas de
+este trabajo (escenarios, conjuntos reales, protocolos y diagnóstico) como estándar mínimo para
+evaluar cualquier variante nueva.
+
+% =====================================================================================
+\section{Trabajo futuro}\label{sec:futuro}
+
+Las líneas siguientes se ordenan de menor a mayor esfuerzo. Las tres primeras atienden limitaciones
+de este trabajo; las demás extienden el método.
+
+\begin{description}
+  \item[Validación externa más amplia.] La validación de este trabajo cubrió tres dominios; falta
+  repetirla con datos de otros países, en particular del Perú, y con instituciones que cerraron, que son
+  parte del drift real de la matrícula.
+  \item[LightGBM como modelo base.] Conservar la elección automática de memoria del
+  \texttt{AdaptiveDriftForest}, pero con LightGBM en cada ventana, para combinar su precisión en demanda
+  con un costo menor.
+  \item[Selección de pesos más estable.] Estimar los pesos con varios cortes recientes en lugar de
+  uno, para reducir la varianza de la elección cuando la cola de validación es corta, y optimizar con
+  Optuna $\beta$, las fracciones de ventana y el tamaño de la cola.
+  \item[Más evidencia en datos reales.] Ampliar el número de conjuntos reales y de semillas para que
+  la prueba de Wilcoxon tenga potencia, y repetir la comparación con ARF, HAT y LightGBM optimizando
+  todos los modelos.
+  \item[Memoria de regímenes.] Combinar las ventanas del \texttt{AdaptiveDriftForest} con la capacidad
+  del \texttt{DriftRegressor} de recuperar bloques antiguos: cuando la MMD entre la cola reciente y un
+  bloque antiguo sea baja y su error reciente también, reactivar ese bloque. Es el caso de la
+  \cref{fig:galeria}(g), donde la versión original todavía gana.
+  \item[Adaptación al lote como opción.] Ofrecer un modo que ajuste los pesos al lote que se va a
+  predecir, útil en casos como Electricity, sin perder la predicción fila a fila del modo por
+  defecto.
+  \item[Detección explícita del cambio.] Acoplar un detector de cambio, como ventanas adaptativas
+  \parencite{bifet2007} o pruebas de cambio estructural \parencite{baiperron1998}, para decidir
+  cuándo reentrenar en lugar de hacerlo a intervalos fijos.
+  \item[Bootstrap temporal probabilístico.] Reemplazar el bootstrap uniforme de cada árbol por uno
+  que muestree con probabilidad $w_i \propto e^{-\alpha\,\Delta t_i}$, controlando el tamaño efectivo
+  de muestra para no perder demasiada información.
+  \item[Divisiones de árbol sensibles al drift.] Añadir al criterio de división de los primeros
+  niveles un término que penalice separar regiones con distribuciones distintas en el tiempo, con la
+  MMD aproximada mediante características aleatorias de Fourier \parencite{rahimi2007} para que el
+  costo sea manejable. La versión simplificada de la \cref{sec:res-tiempo} indica que el criterio no
+  debería limitarse a los primeros niveles. La partición recursiva basada en modelos de
+  \textcite{zeileis2008}, que elige divisiones con pruebas de inestabilidad de parámetros, es la
+  referencia más cercana.
+  \item[Intervalos de predicción.] Acompañar cada predicción con un intervalo válido bajo drift,
+  usando predicción conformal con ponderación temporal \parencite{barber2023}; en aplicaciones de
+  riesgo, el ancho del intervalo es tan importante como el punto.
+  \item[Clasificación y paquete instalable.] Extender el método a clasificación y empaquetarlo con
+  pruebas automáticas y documentación para que otros miembros del CCDE lo usen en sus proyectos.
+\end{description}
+
+\printbibliography[title={Referencias}]
+
+% =====================================================================================
+\appendix
+\section{Tablas complementarias}\label{app:tablas}
+
+\begin{table}[htbp]
+  \centering
+  \caption{Cociente de RMSE respecto al RF convencional, datos reales, walk-forward}\label{tab:real-walk}
+  \small
+  \input{tablas/real_walk.tex}
+  \nota{Media geométrica sobre 6 pasos, semilla 0. Abreviaturas como en la \cref{tab:sint-walk}.
+  \textit{Fuente:} \texttt{experiments/results/benchmark\_real*.csv}.}
+\end{table}
+
+\begin{table}[htbp]
+  \centering
+  \caption{Cociente de RMSE respecto al RF convencional, escenarios sintéticos, partición 80/20}\label{tab:sint-static}
+  \small
+  \input{tablas/sint_static.tex}
+  \nota{Media geométrica sobre 3 semillas. Abreviaturas como en la \cref{tab:sint-walk}.
+  \textit{Fuente:} \texttt{experiments/results/benchmark\_synthetic*.csv}.}
+\end{table}
+
+\begin{table}[htbp]
+  \centering
+  \caption{Cociente de RMSE respecto al RF convencional, datos reales, partición 80/20}\label{tab:real-static}
+  \small
+  \input{tablas/real_static.tex}
+  \nota{Semilla 0. Abreviaturas como en la \cref{tab:sint-walk}. \textit{Fuente:}
+  \texttt{experiments/results/benchmark\_real*.csv}.}
+\end{table}
+
+\section{Reproducibilidad}\label{app:repro}
+
+El código y los resultados están en el repositorio \texttt{DriftAdaptiveForest}, rama
+\texttt{mejoras-modelo-drift}, con Python 3, scikit-learn, SciPy y Optuna (versiones en
+\texttt{requirements.txt}). Desde la raíz del repositorio:
+
+\begin{verbatim}
+python -I experiments/benchmark_drift.py --suite all --seeds 0 1 2
+python -I experiments/benchmark_drift.py --suite all --seeds 0 1 2 \
+       --models ADF_error ADF_hybrid --no-diag --tag adf
+python -I experiments/tune_benchmark.py --trials 20
+python -I experiments/summarize_benchmark.py
+python paper/generar_tablas.py
+# Versión 2: validación externa y comparación con la literatura
+python -I experiments/finance_experiment.py --seeds 0 1 2
+python -I experiments/macro_experiment.py --seeds 0 1 2
+python -I experiments/matricula_experiment.py --seeds 0 1
+python -I experiments/tiempo_experiment.py
+python -I experiments/comparacion_literatura.py
+python -I experiments/costos_operativos.py
+python -I paper/generar_tablas_v2.py
+\end{verbatim}
+
+Los datos de la validación externa se descargan con \texttt{experiments/finance\_data.py},
+\texttt{experiments/macro\_data.py} (requiere una clave gratuita de la API de FRED en la variable
+\texttt{FRED\_API\_KEY}) y \texttt{experiments/matricula\_data.py}.
+
+El último comando reescribe las tablas y las cifras del texto (\texttt{paper/tablas/}) a partir de
+los archivos de resultados, de modo que el documento se mantiene coherente con ellos.
+
+\end{document}

@@ -22,8 +22,10 @@ RES = ROOT / "experiments" / "results"
 REF = "RF_clasico"
 
 
-def load():
-    frames = [pd.read_csv(p) for p in sorted(RES.glob("benchmark_*.csv"))]
+def load(holdout: bool = False):
+    """holdout=False: todo salvo las corridas *_holdout (semillas 3-5); True: solo esas."""
+    files = [p for p in sorted(RES.glob("benchmark_*.csv")) if ("holdout" in p.name) == holdout]
+    frames = [pd.read_csv(p) for p in files]
     df = pd.concat(frames, ignore_index=True)
     diags = pd.concat([pd.read_csv(p) for p in sorted(RES.glob("diagnostics_*.csv"))], ignore_index=True)
     return df, diags
@@ -97,7 +99,8 @@ def overall(d, protocol, kind):
 
 
 def main():
-    df, diags = load()
+    holdout = "--holdout" in sys.argv
+    df, diags = load(holdout)
     d = ratios(df)
     parts = ["# Resumen benchmark DriftRegressor vs Random Forest\n",
              "Valores = RMSE del modelo / RMSE del RF clásico (media geométrica). < 1 es mejor que el RF clásico. "
@@ -119,7 +122,7 @@ def main():
     parts.append("| " + " | ".join(dg.columns) + " |")
     parts.append("|" + "---|" * len(dg.columns))
     parts.extend("| " + " | ".join(r) + " |" for r in dg.values.tolist())
-    out = RES / "summary.md"
+    out = RES / ("summary_holdout.md" if holdout else "summary.md")
     out.write_text("\n".join(parts), encoding="utf-8")
     print("\n".join(parts))
 
